@@ -1,0 +1,1 @@
+cmake -D CMAKE_BUILD_TYPE=Debug -D CMAKE_TOOLCHAIN_FILE=..\CMakePlatforms\BeagleBoneBlack.cmake -G "Eclipse CDT4 - Unix Makefiles" ..
