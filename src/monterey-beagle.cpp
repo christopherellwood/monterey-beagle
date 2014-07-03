@@ -1,21 +1,21 @@
 #include "monterey-beagle.h"
+//#include <linux/delay.h>
 
 #define INPUTPORT 51000   //The port on which to listen for incoming data
 #define OUTPUTPORT 50000   //The port on which to send return data
 
-
 int main()
 {
-
 	//Declare a UDP Connection
 	UDP_Connection UDP(INPUTPORT, OUTPUTPORT);
 
+	printf("success1\n");
 	//Create an ROV object
 	ROV_Manager ROV(&UDP);
 
+
 	//Structure of pointers to UDP and ROV so they can be passed together
 	Pointer_Set Pointers;
-
 	//Set the values in the pointer structure
 	Pointers.connection = &UDP;
 	Pointers.manager = &ROV;

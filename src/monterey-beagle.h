@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -12,6 +14,9 @@
 #include <pthread.h>
 #include <iostream>
 #include <fstream>
+#include <linux/i2c-dev.h>
+#include <sys/ioctl.h>
+
 
 #define BUFFERLEN 64  //Length of receive buffer
 #define NUM_MOTORS 3  //Number of motors
@@ -20,17 +25,52 @@
 
 using namespace std;
 
+class LSM303dLHC
+{
+private:
+public:
+	LSM303dLHC()
+	{
+
+	}
+	~LSM303dLHC()
+	{
+
+	}
+
+};
+
+class I2C_Peripheral
+{
+private:
+
+public:
+	I2C_Peripheral()
+	{
+
+	}
+	~I2C_Peripheral()
+	{
+
+	}
+
+
+};
+
 class IO_Pin
 {
 private:
-	char * direction_;
-	char * directionfile;
-	char * valuefile;
-	char * ID_;
-	static const int kfilelength = 35;
+	static const int kthreeCharacters = 3;
+	static const int ktwoCharacters = 2;
+	static const int kfilelength = 64;
 	static const int knumAM335xGPIO = 128;
-	char value_[2];
-	FILE * fp_;
+	char direction_[kthreeCharacters];
+	char directionfile[kfilelength];
+	char valuefile[kfilelength];
+	char ID_[kthreeCharacters];
+
+	char value_[ktwoCharacters];
+
 
 public:
 	IO_Pin(char * ID, char * direction, int value)
@@ -44,33 +84,35 @@ public:
 			((value == 0) ||
 			 (value == 1)))
 		{
-			valuefile = new char[kfilelength];
-			directionfile = new char[kfilelength];
-			bzero((char *) directionfile, kfilelength);
-			bzero((char *) valuefile, kfilelength);
-			ID_ = ID;
-			direction_ = direction;
+			FILE * fp;
+			bzero(directionfile, kfilelength);
+			bzero(valuefile, kfilelength);
+			bzero(direction_, kthreeCharacters);
+			bzero(ID_, kthreeCharacters);
+			bzero(value_, ktwoCharacters);
+			strcpy(ID_, ID);
+			strcpy(direction_, direction);
 
 			sprintf(value_, "%d", value);
 			sprintf(directionfile, "/sys/class/gpio/gpio%s/direction", ID_);
 			sprintf(valuefile, "/sys/class/gpio/gpio%s/value", ID_);
 
-			fp_ = fopen("/sys/class/gpio/export", "ab");
-			rewind(fp_);
-			fwrite(ID_, sizeof(char), 4, fp_);
-			fclose(fp_);
+			fp = fopen("/sys/class/gpio/export", "ab");
+			rewind(fp);
+			fwrite(ID_, sizeof(char), 4, fp);
+			fclose(fp);
 
-			fp_ = fopen(directionfile, "rb+");
-			rewind(fp_);
-			fwrite(direction_, sizeof(char), 4, fp_);
-			fclose(fp_);
+			fp = fopen(directionfile, "rb+");
+			rewind(fp);
+			fwrite(direction_, sizeof(char), 4, fp);
+			fclose(fp);
 
 			if (strcmp(direction, "out") == 0)
 			{
-				fp_ = fopen(valuefile, "rb+");
-				rewind(fp_);
-				fwrite(value_, sizeof(char), 1, fp_);
-				fclose(fp_);
+				fp = fopen(valuefile, "rb+");
+				rewind(fp);
+				fwrite(value_, sizeof(char), 1, fp);
+				fclose(fp);
 			}
 		}
 		else
@@ -81,25 +123,28 @@ public:
 	}
 	~IO_Pin()
 	{
-		fp_ = fopen("/sys/class/gpio/unexport", "ab");
-		rewind(fp_);
-		fwrite(ID_, sizeof(char), 4, fp_);
-		fclose(fp_);
+		FILE * fp;
+		fp = fopen("/sys/class/gpio/unexport", "ab");
+		rewind(fp);
+		fwrite(ID_, sizeof(char), 4, fp);
+		fclose(fp);
 	}
 	void Set(int value)
 	{
 		// Set the value of a pin (0 or 1)
+		FILE * fp;
 		sprintf(value_, "%d", value);
-		fp_ = fopen(valuefile, "rb+");
-		rewind(fp_);
-		fwrite(value_, sizeof(char), 1, fp_);
-		fclose(fp_);
+		fp = fopen(valuefile, "rb+");
+		rewind(fp);
+		fwrite(value_, sizeof(char), 1, fp);
+		fclose(fp);
 	}
 	int Read()
 	{
-		fp_ = fopen(valuefile, "rb+");
-		rewind(fp_);
-		fread(value_, sizeof(char), 1, fp_);
+		FILE * fp;
+		fp = fopen(valuefile, "rb+");
+		rewind(fp);
+		fread(value_, sizeof(char), 1, fp);
 		return atoi(value_);
 	}
 };
@@ -108,26 +153,24 @@ class PWM_Pin
 {
 
 private:
-	char * period_;
-	char * periodfile;
-	char * duty_;
-	char * dutyfile;
-	char * polarityfile;
-	char * ID_;
-	static const int kfilelength = 50;
+	static const int kfilelength = 64;
+	static const int kvaluelength = 12;
+	char period_[kvaluelength];
+	char ID_[kvaluelength];
+	char duty_[kvaluelength];
+	char periodfile[kfilelength];
+	char dutyfile[kfilelength];
+	char polarityfile[kfilelength];
 	FILE * fp_;
 public:
 	PWM_Pin(char * ID, char * period, char * duty)
 	{
-		periodfile = new char[kfilelength];
-		dutyfile = new char[kfilelength];
-		polarityfile = new char[kfilelength];
-		bzero((char *) periodfile, kfilelength);
-		bzero((char *) dutyfile, kfilelength);
-		bzero((char *) polarityfile, kfilelength);
-		ID_ = ID;
-		period_ = period;
-		duty_ = duty;
+		bzero(periodfile, kfilelength);
+		bzero(dutyfile, kfilelength);
+		bzero(polarityfile, kfilelength);
+		strcpy(ID_, ID);
+		strcpy(period_, period);
+		strcpy(duty_, duty);
 
 		sprintf(periodfile, "/sys/devices/ocp.2/%s/period", ID_);
 		sprintf(dutyfile, "/sys/devices/ocp.2/%s/duty", ID_);
@@ -135,12 +178,12 @@ public:
 
 		fp_ = fopen(periodfile, "rb+");
 		rewind(fp_);
-		fwrite(period_, sizeof(char), 12, fp_);
+		fwrite(period_, sizeof(char), kvaluelength, fp_);
 		fclose(fp_);
 
 		fp_ = fopen(dutyfile, "rb+");
 		rewind(fp_);
-		fwrite(duty_, sizeof(char), 12, fp_);
+		fwrite(duty_, sizeof(char), kvaluelength, fp_);
 		fclose(fp_);
 
 		fp_ = fopen(polarityfile, "rb+");
@@ -154,7 +197,7 @@ public:
 	}
 	void Set_Period(char * period)
 	{
-		period_ = period;
+		strcpy(period_, period);
 		fp_ = fopen(periodfile, "rb+");
 		rewind(fp_);
 		fwrite(period_, sizeof(char), 12, fp_);
@@ -162,7 +205,7 @@ public:
 	}
 	void Set_Duty(char * duty)
 	{
-		duty_ = duty;
+		strcpy(duty_, duty);
 		fp_ = fopen(dutyfile, "rb+");
 		rewind(fp_);
 		fwrite(duty_, sizeof(char), 12, fp_);
@@ -170,14 +213,13 @@ public:
 	}
 };
 
-class GPIO_Control
+class GPIO_Pins
 {
-private:
 public:
 	IO_Pin * Pin[4];
 	PWM_Pin * MotorPWM[3];
 	PWM_Pin * ServoPWM[3];
-	GPIO_Control()
+	GPIO_Pins()
 	{
 		Pin[0] = new IO_Pin("68", "out", 0);
 		Pin[1] = new IO_Pin("45", "out", 0);
@@ -190,7 +232,8 @@ public:
 		ServoPWM[1] = new PWM_Pin("pwm_test_P9_21.15", "20000000", "1000000");
 		ServoPWM[2] = new PWM_Pin("pwm_test_P9_22.16", "20000000", "1000000");
 	}
-	~GPIO_Control()
+
+	~GPIO_Pins()
 	{
 	}
 };
@@ -201,8 +244,8 @@ struct Pointer_Set {
 	 * when it is a member of a class. Static functions are global, so they
 	 * cannot see or act on data members of instances.
 	 */
-	void * manager;
 	void * connection;
+	void * manager;
 };
 
 class UDP_Connection
@@ -235,6 +278,7 @@ public:
     char rxbuffer[BUFFERLEN];
 
     char * txbuffer;
+
     UDP_Connection(unsigned int inPort, unsigned int outPort)
     {
         /*
@@ -321,8 +365,9 @@ class ROV_Manager
      * collection.
      */
 private:
+    GPIO_Pins *Setpin;
     char sensor_string_[BUFFERLEN];
-    UDP_Connection * connection_;
+    UDP_Connection *connection_;
     int motor[NUM_MOTORS];
     int relay[NUM_RELAYS];
     int servo[NUM_SERVOS];
@@ -417,27 +462,26 @@ private:
     	{
     		char * a = new char[12];
     		sprintf(a, "%i", motor[i]*1000);
-    		Setpin.MotorPWM[i]->Set_Duty(a);
+    		Setpin->MotorPWM[i]->Set_Duty(a);
     	}
     	for (i=0; i<NUM_RELAYS; i++)
     	{
-    		Setpin.Pin[i]->Set(relay[i]);
+    		Setpin->Pin[i]->Set(relay[i]);
     	}
     	for (i=0; i<NUM_SERVOS; i++)
     	{
     		char * a = new char[12];
     		sprintf(a, "%i", motor[i]*1000);
-    		Setpin.ServoPWM[i]->Set_Duty(a);
+    		Setpin->ServoPWM[i]->Set_Duty(a);
     	}
     }
 public:
-    GPIO_Control Setpin;
-    ROV_Manager(void *UDP_Connection_Ptr)
+
+    ROV_Manager(UDP_Connection * UDP_Ptr)
 	{
         pthread_t comms_thread;
 		bzero((char *) &sensor_string_, BUFFERLEN);
-		connection_ = (UDP_Connection *)UDP_Connection_Ptr;
-		Setpin = GPIO_Control();
+		connection_ = UDP_Ptr;
 	}
     ~ROV_Manager()
     {
@@ -454,7 +498,34 @@ public:
     }
     void Sample_Sensors()
     {
-        int i=0;
+    	/*int file, i;
+    	char *filename = "/dev/i2c-2";
+    	if ((file = open(filename, O_RDWR)) < 0) {
+    	    perror("Failed to open the i2c bus");
+    	    exit(1);
+    	}
+    	int addr = 0x19;          // The I2C address of the ADC
+    	if (ioctl(file, I2C_SLAVE, addr) < 0) {
+    	    printf("Failed to acquire bus access and/or talk to slave.\n");
+    	    exit(1);
+    	}
+
+    	char buf[30] = {0};
+    	float data;
+    	char channel;
+    	    // Using I2C Read
+    	    if (read(file,buf,2) != 2)
+    	    {
+    	        printf("Failed to read from the i2c bus.\n");
+    	        for (i=0; i<30; i++){
+    	        	printf("%c ", buf[i]);
+    	        }
+    	        printf("\n");
+    	    }*/
+
+
+
+    	int i=0;
         while(1)
         {
             sprintf(sensor_string_, "%d %d %d %d %d %d", i, i+1, i+2, i+3, i+4, i+5);
@@ -467,7 +538,3 @@ public:
     }
 
 }; //End ROV Manager Class
-
-
-
-

@@ -1,13 +1,18 @@
-To setup compiler
+To compile the beaglebone code in windows:
 
 Install Eclipse Kepler
 Install Linaro arm-linux-gnueabi-2012.04
 Install Cmake
 Install Mingw
+
+Update path. Go to:
 My Computer->properties->Advanced System Settings
+Add this to the "path" box:
 C:\MinGW\bin;C:\MinGW\MSYS\1.0\local\bin;C:\MinGW\MSYS\1.0\bin;C:\Program Files (x86)\CMake 2.8\bin;C:\Program Files (x86)\Linaro\gcc-linaro-arm-linux-gnueabi-2012.04\bin
 
+This part is fraught with difficulty. If it doesn't work, you have to make sure you did the previous steps.
 Run build.bat from command line
+
 Load Eclipse and import project
 
 
