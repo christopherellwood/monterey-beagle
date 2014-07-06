@@ -14,9 +14,10 @@
 #include <pthread.h>
 #include <iostream>
 #include <fstream>
-#include <linux/i2c-dev.h>
+#include "i2c-dev.h"
 #include <sys/ioctl.h>
-
+#include <sys/time.h>
+#include <signal.h>
 
 #define BUFFERLEN 64  //Length of receive buffer
 #define NUM_MOTORS 3  //Number of motors
@@ -25,55 +26,150 @@
 
 using namespace std;
 
-class LSM303dLHC
+class LSM303DLHC
 {
 private:
+	static const int ki2cBusFileLength = 12;
+
+	//Magnetometer Constants
+	static const int knumMagRegisters = 7;
+	static const int kRunMag15Hz = 0x14;
+	static const int kMagControlReg = 0x00;
+	static const int kMagFirstDataReg = 0x02;
+
+	//Accelerometer Constants
+	static const int kRunAccel50Hz = 0x2700;
+	static const int kRunAccelFullScale = 0x4000;
+	static const int kAccelControlReg1 = 0x20;
+	static const int kAccelControlReg4 = 0x23;
+	static const int kAccelFirstDataReg = 0x28;
+	static const int knumAccelRegisters = 6;
+	char i2cBusFileName[ki2cBusFileLength];
+	int MagAddress_;
+	int AccelAddress_;
+	char RawAccel[knumAccelRegisters];
+	char RawMag[knumMagRegisters];
+
 public:
-	LSM303dLHC()
+	LSM303DLHC()
+	{
+		MagAddress_ = 0;
+		AccelAddress_ = 0;
+		memset(RawMag, 0, knumMagRegisters);
+		memset(RawAccel, 0, knumAccelRegisters);
+		memset(i2cBusFileName, NULL, ki2cBusFileLength);
+	}
+	~LSM303DLHC()
 	{
 
 	}
-	~LSM303dLHC()
+	void Configure(int i2cBus, int MagAddress, int AccelAddress)
 	{
-
+		MagAddress_ = MagAddress;
+		AccelAddress_ = AccelAddress;
+		sprintf(i2cBusFileName, "/dev/i2c-%d", i2cBus);
+		int fp;
+		fp = open(i2cBusFileName, O_RDWR);
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, MagAddress_) >= 0)
+			{
+				printf("LSM303DLHC Magnetometer enabled on address %x\n", MagAddress_);
+				i2c_smbus_write_word_data(fp, kMagControlReg, kRunMag15Hz);
+				i2c_smbus_write_word_data(fp, kMagFirstDataReg, 0x00);
+			}
+			else
+			{
+				printf("Error communicating with LSM303DLHC Magnetometer\n");
+			}
+			if (ioctl(fp, I2C_SLAVE, AccelAddress_) >= 0)
+			{
+				printf("LSM303DLHC Accelerometer enabled on address %x\n", AccelAddress_);
+				i2c_smbus_write_word_data(fp, kAccelControlReg1, kRunAccel50Hz);
+				i2c_smbus_write_word_data(fp, kAccelControlReg4, kRunAccelFullScale);
+			}
+			else
+			{
+				printf("Error communicating with LSM303DLHC Accelerometer");
+			}
+			close(fp);
+		}
 	}
 
-};
-
-class I2C_Peripheral
-{
-private:
-
-public:
-	I2C_Peripheral()
+	void ReadAccelRawData()
 	{
-
+		int fp;
+		fp = open(i2cBusFileName, O_RDWR);
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, AccelAddress_) >= 0)
+			{
+				int i;
+				for (i = 0; i < knumAccelRegisters; i++)
+				{
+					RawAccel[i] = i2c_smbus_read_word_data(fp, kAccelFirstDataReg + i);
+				}
+				//printf("%x%x, %x%x, %x%x\r",  RawAccel[0], RawAccel[1], RawAccel[2], RawAccel[3], RawAccel[4], RawAccel[5]);
+				close(fp);
+			}
+		}
 	}
-	~I2C_Peripheral()
+	void ReadMagRawData()
 	{
+		int fp;
+		fp = open(i2cBusFileName, O_RDWR);
 
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, MagAddress_) >= 0)
+			{
+				int i;
+				for (i = 0; i < knumMagRegisters; i++)
+				{
+					RawMag[i] = i2c_smbus_read_word_data(fp, kMagFirstDataReg + i);
+				}
+				//printf("%x%x, %x%x, %x%x\r", RawMag[1], RawMag[2], RawMag[3], RawMag[4], RawMag[5], RawMag[6]);
+				close(fp);
+			}
+		}
 	}
+	int GetHeading()
+	{
+		int heading;
 
 
+
+		return heading;
+	}
 };
 
 class IO_Pin
 {
 private:
-	static const int kthreeCharacters = 3;
-	static const int ktwoCharacters = 2;
-	static const int kfilelength = 64;
+	static const int kdirectionlength = 4; //Lengths need to be 1 longer then
+	static const int kvaluelength = 2;     //the string to accommodate a NULL
+	static const int kIDlength = 4;        //character for string operations
+	static const int kDiscretePinfilelength = 64;
 	static const int knumAM335xGPIO = 128;
-	char direction_[kthreeCharacters];
-	char directionfile[kfilelength];
-	char valuefile[kfilelength];
-	char ID_[kthreeCharacters];
-
-	char value_[ktwoCharacters];
-
+	char direction_[kdirectionlength];
+	char directionfile[kDiscretePinfilelength];
+	char valuefile[kDiscretePinfilelength];
+	char ID_[kIDlength];
+	char value_[kvaluelength];
 
 public:
-	IO_Pin(char * ID, char * direction, int value)
+	IO_Pin()
+	{
+	}
+	~IO_Pin()
+	{
+		FILE * fp;
+		fp = fopen("/sys/class/gpio/unexport", "ab");
+		rewind(fp);
+		fwrite(ID_, sizeof(char), kIDlength, fp);
+		fclose(fp);
+	}
+	void Configure(char * ID, char * direction, int value)
 	{
 	//char direction must be "in" or "out"
 	//note that if it is an input, the value argument has no effect
@@ -84,50 +180,50 @@ public:
 			((value == 0) ||
 			 (value == 1)))
 		{
+			//initialize and zero-ize variables
 			FILE * fp;
-			bzero(directionfile, kfilelength);
-			bzero(valuefile, kfilelength);
-			bzero(direction_, kthreeCharacters);
-			bzero(ID_, kthreeCharacters);
-			bzero(value_, ktwoCharacters);
+			bzero(directionfile, kDiscretePinfilelength);
+			bzero(valuefile, kDiscretePinfilelength);
+			bzero(direction_, kdirectionlength);
+			bzero(ID_, kIDlength);
+			bzero(value_, kvaluelength);
 			strcpy(ID_, ID);
 			strcpy(direction_, direction);
 
+			//set access filenames
 			sprintf(value_, "%d", value);
 			sprintf(directionfile, "/sys/class/gpio/gpio%s/direction", ID_);
 			sprintf(valuefile, "/sys/class/gpio/gpio%s/value", ID_);
 
+			//create files in filesystem to write to
 			fp = fopen("/sys/class/gpio/export", "ab");
 			rewind(fp);
-			fwrite(ID_, sizeof(char), 4, fp);
+			fwrite(ID_, sizeof(char), kIDlength, fp);
 			fclose(fp);
 
+			//set direction
 			fp = fopen(directionfile, "rb+");
 			rewind(fp);
-			fwrite(direction_, sizeof(char), 4, fp);
+			fwrite(direction_, sizeof(char), kdirectionlength, fp);
 			fclose(fp);
 
+			//set initial value if it is an output
 			if (strcmp(direction, "out") == 0)
 			{
 				fp = fopen(valuefile, "rb+");
 				rewind(fp);
-				fwrite(value_, sizeof(char), 1, fp);
+				fwrite(value_, sizeof(char), kvaluelength, fp);
 				fclose(fp);
 			}
+
+		//print setup information to the user
+			printf("IO %s set as %sput\n", ID_, direction_);
 		}
 		else
 		{
 			printf("Error: GPIO ID number out of bounds\n");
 			printf("Error direction %s\n", direction);
 		}
-	}
-	~IO_Pin()
-	{
-		FILE * fp;
-		fp = fopen("/sys/class/gpio/unexport", "ab");
-		rewind(fp);
-		fwrite(ID_, sizeof(char), 4, fp);
-		fclose(fp);
 	}
 	void Set(int value)
 	{
@@ -153,21 +249,27 @@ class PWM_Pin
 {
 
 private:
-	static const int kfilelength = 64;
-	static const int kvaluelength = 12;
+	static const int kPWMfilelength = 64;
+	static const int kvaluelength = 24;
 	char period_[kvaluelength];
 	char ID_[kvaluelength];
 	char duty_[kvaluelength];
-	char periodfile[kfilelength];
-	char dutyfile[kfilelength];
-	char polarityfile[kfilelength];
-	FILE * fp_;
+	char periodfile[kPWMfilelength];
+	char dutyfile[kPWMfilelength];
+	char polarityfile[kPWMfilelength];
+
 public:
-	PWM_Pin(char * ID, char * period, char * duty)
+	PWM_Pin()
 	{
-		bzero(periodfile, kfilelength);
-		bzero(dutyfile, kfilelength);
-		bzero(polarityfile, kfilelength);
+	}
+	~PWM_Pin()
+	{
+	}
+	void Configure(char * ID, char * period, char * duty)
+	{
+		bzero(periodfile, kPWMfilelength);
+		bzero(dutyfile, kPWMfilelength);
+		bzero(polarityfile, kPWMfilelength);
 		strcpy(ID_, ID);
 		strcpy(period_, period);
 		strcpy(duty_, duty);
@@ -176,65 +278,69 @@ public:
 		sprintf(dutyfile, "/sys/devices/ocp.2/%s/duty", ID_);
 		sprintf(polarityfile, "/sys/devices/ocp.2/%s/polarity", ID_);
 
-		fp_ = fopen(periodfile, "rb+");
-		rewind(fp_);
-		fwrite(period_, sizeof(char), kvaluelength, fp_);
-		fclose(fp_);
+		FILE * fp;
+		fp = fopen(periodfile, "rb+");
+		rewind(fp);
+		fwrite(period_, sizeof(char), kvaluelength, fp);
+		fclose(fp);
 
-		fp_ = fopen(dutyfile, "rb+");
-		rewind(fp_);
-		fwrite(duty_, sizeof(char), kvaluelength, fp_);
-		fclose(fp_);
+		fp = fopen(dutyfile, "rb+");
+		rewind(fp);
+		fwrite(duty, sizeof(char), kvaluelength, fp);
+		fclose(fp);
 
-		fp_ = fopen(polarityfile, "rb+");
-		rewind(fp_);
-		fwrite("0", sizeof(char), 1, fp_);
-		fclose(fp_);
-	}
-	~PWM_Pin()
-	{
+		fp = fopen(polarityfile, "rb+");
+		rewind(fp);
+		fwrite("0", sizeof(char), 1, fp);
+		fclose(fp);
 
+		printf("PWM %s period %sns, duty %sns\n", ID_, period_, duty_);
 	}
 	void Set_Period(char * period)
 	{
+		FILE * fp;
 		strcpy(period_, period);
-		fp_ = fopen(periodfile, "rb+");
-		rewind(fp_);
-		fwrite(period_, sizeof(char), 12, fp_);
-		fclose(fp_);
+		fp = fopen(periodfile, "rb+");
+		rewind(fp);
+		fwrite(period_, sizeof(char), 12, fp);
+		fclose(fp);
 	}
 	void Set_Duty(char * duty)
 	{
+		FILE * fp;
 		strcpy(duty_, duty);
-		fp_ = fopen(dutyfile, "rb+");
-		rewind(fp_);
-		fwrite(duty_, sizeof(char), 12, fp_);
-		fclose(fp_);
+		fp = fopen(dutyfile, "rb+");
+		rewind(fp);
+		fwrite(duty, sizeof(char), 12, fp);
+		fclose(fp);
 	}
 };
 
 class GPIO_Pins
 {
 public:
-	IO_Pin * Pin[4];
-	PWM_Pin * MotorPWM[3];
-	PWM_Pin * ServoPWM[3];
+	IO_Pin Pin[4];
+	PWM_Pin MotorPWM[3];
+	PWM_Pin ServoPWM[3];
 	GPIO_Pins()
 	{
-		Pin[0] = new IO_Pin("68", "out", 0);
-		Pin[1] = new IO_Pin("45", "out", 0);
-		Pin[2] = new IO_Pin("44", "out", 0);
-		Pin[3] = new IO_Pin("26", "out", 0);
-		MotorPWM[0] = new PWM_Pin("pwm_test_P8_13.11", "20000000", "1000000");
-		MotorPWM[1] = new PWM_Pin("pwm_test_P8_19.12", "20000000", "1000000");
-		MotorPWM[2] = new PWM_Pin("pwm_test_P9_14.13", "20000000", "1000000");
-		ServoPWM[0] = new PWM_Pin("pwm_test_P9_16.14", "20000000", "1000000");
-		ServoPWM[1] = new PWM_Pin("pwm_test_P9_21.15", "20000000", "1000000");
-		ServoPWM[2] = new PWM_Pin("pwm_test_P9_22.16", "20000000", "1000000");
 	}
-
 	~GPIO_Pins()
 	{
+	}
+	void ReadHardwareConfig()
+	{
+		Pin[0].Configure("68", "out", 0); //P8_10
+		Pin[1].Configure("45", "out", 0); //P8_11
+		Pin[2].Configure("44", "out", 0); //P8_12
+		Pin[3].Configure("26", "out", 0); //P8_14
+
+		MotorPWM[0].Configure("pwm_test_P8_13.11", "20000000", "1000000");
+		MotorPWM[1].Configure("pwm_test_P8_19.12", "20000000", "1000000");
+		MotorPWM[2].Configure("pwm_test_P9_14.13", "20000000", "1000000");
+		ServoPWM[0].Configure("pwm_test_P9_16.14", "20000000", "1000000");
+		ServoPWM[1].Configure("pwm_test_P9_21.15", "20000000", "1000000");
+		ServoPWM[2].Configure("pwm_test_P9_22.16", "20000000", "1000000");
 	}
 };
 
@@ -317,11 +423,9 @@ public:
         if (bind(socketnum_, (struct sockaddr *) &server_addr_,
             sizeof(server_addr_)) < 0)
             printf("ERROR on binding");
-
     }
     ~UDP_Connection()
     {
-
     }
     void ReceiveData()
     {
@@ -365,12 +469,17 @@ class ROV_Manager
      * collection.
      */
 private:
-    GPIO_Pins *Setpin;
-    char sensor_string_[BUFFERLEN];
+    GPIO_Pins HardwarePinArray;
+    LSM303DLHC DirectionSensor;
     UDP_Connection *connection_;
+    static const int kSensorWait = 20000; //uSeconds
+
+    char sensor_string_[BUFFERLEN];
+
     int motor[NUM_MOTORS];
     int relay[NUM_RELAYS];
     int servo[NUM_SERVOS];
+
     static void *Communications_Handler(void *ptr)
     {
         /* This function is run as a separate thread to wait for incoming
@@ -398,7 +507,21 @@ private:
                     m->Apply_Commands();
                 }
         }
-        pthread_exit(NULL);
+        return 0;
+    }
+    static void *Sensor_Handler(void *ptr)
+    {
+        /* This function is run as a separate thread to sample the sensors
+         * independently of other program activity.
+         */
+
+    	Pointer_Set * p;
+    	p = (Pointer_Set *)ptr;
+        UDP_Connection *c;
+        c = (UDP_Connection *)p->connection;
+        ROV_Manager *m;
+        m = (ROV_Manager *)p->manager;
+        m->Sample_Sensors();
         return 0;
     }
     void Parse_Command(char * rxdata)
@@ -462,26 +585,32 @@ private:
     	{
     		char * a = new char[12];
     		sprintf(a, "%i", motor[i]*1000);
-    		Setpin->MotorPWM[i]->Set_Duty(a);
+    		HardwarePinArray.MotorPWM[i].Set_Duty(a);
     	}
     	for (i=0; i<NUM_RELAYS; i++)
     	{
-    		Setpin->Pin[i]->Set(relay[i]);
+    		HardwarePinArray.Pin[i].Set(relay[i]);
     	}
     	for (i=0; i<NUM_SERVOS; i++)
     	{
     		char * a = new char[12];
     		sprintf(a, "%i", motor[i]*1000);
-    		Setpin->ServoPWM[i]->Set_Duty(a);
+    		HardwarePinArray.ServoPWM[i].Set_Duty(a);
     	}
     }
+
 public:
+    int comms_thread_id;
+    int sensor_thread_id;
 
     ROV_Manager(UDP_Connection * UDP_Ptr)
 	{
-        pthread_t comms_thread;
+    	DirectionSensor.Configure(2, 0x1e, 0x19);
+    	HardwarePinArray.ReadHardwareConfig();
 		bzero((char *) &sensor_string_, BUFFERLEN);
 		connection_ = UDP_Ptr;
+	    comms_thread_id = 0;
+	    sensor_thread_id = 0;
 	}
     ~ROV_Manager()
     {
@@ -489,52 +618,32 @@ public:
     void Start_Comms(void * ptr)
     {
     /*
-     * This Function initiates a new thread to listen for communications
+     * This function initiates a new thread to listen for communications
      */
-        int comms_thread_id;
         pthread_t comms_thread;
         comms_thread_id = pthread_create(&comms_thread, NULL,
                 Communications_Handler, (void *) ptr);
     }
+    void Start_Sensors(void * ptr)
+    {
+	/*
+	 * This function initiates a timer action to sample the sensors
+	 */
+        pthread_t sensor_thread;
+        sensor_thread_id = pthread_create(&sensor_thread, NULL,
+                Sensor_Handler, (void *) ptr);
+    }
     void Sample_Sensors()
     {
-    	/*int file, i;
-    	char *filename = "/dev/i2c-2";
-    	if ((file = open(filename, O_RDWR)) < 0) {
-    	    perror("Failed to open the i2c bus");
-    	    exit(1);
-    	}
-    	int addr = 0x19;          // The I2C address of the ADC
-    	if (ioctl(file, I2C_SLAVE, addr) < 0) {
-    	    printf("Failed to acquire bus access and/or talk to slave.\n");
-    	    exit(1);
+    	while(1)
+    	{
+    		DirectionSensor.ReadAccelRawData();
+        	usleep(kSensorWait);
+        	//Hardware pin to get loop timing
+    		//HardwarePinArray.Pin[0].Set(1); //P8_10
+        	//HardwarePinArray.Pin[0].Set(0); //P8_10
     	}
 
-    	char buf[30] = {0};
-    	float data;
-    	char channel;
-    	    // Using I2C Read
-    	    if (read(file,buf,2) != 2)
-    	    {
-    	        printf("Failed to read from the i2c bus.\n");
-    	        for (i=0; i<30; i++){
-    	        	printf("%c ", buf[i]);
-    	        }
-    	        printf("\n");
-    	    }*/
-
-
-
-    	int i=0;
-        while(1)
-        {
-            sprintf(sensor_string_, "%d %d %d %d %d %d", i, i+1, i+2, i+3, i+4, i+5);
-            connection_->txbuffer = sensor_string_;
-            i++;
-            if (i > 5) i = 0;
-            sleep(1);
-        }
-        return;
     }
-
 }; //End ROV Manager Class
+

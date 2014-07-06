@@ -6,26 +6,30 @@
 
 int main()
 {
-	//Declare a UDP Connection
+	//Declare a UDP Connection for commands and telemetry
 	UDP_Connection UDP(INPUTPORT, OUTPUTPORT);
 
-	printf("success1\n");
-	//Create an ROV object
+	//Create the ROV object that interprets the commands and controls the ROV
 	ROV_Manager ROV(&UDP);
 
-
-	//Structure of pointers to UDP and ROV so they can be passed together
+	//Pointers to UDP and ROV so they can be passed to different threads
 	Pointer_Set Pointers;
 	//Set the values in the pointer structure
 	Pointers.connection = &UDP;
 	Pointers.manager = &ROV;
 
-	//Start ROV communications server, this branches a thread and loops
+	//Start the ROV communications module
 	ROV.Start_Comms(&Pointers);
 
-	//Start sampling sensors, this just samples the sensors and loops
-	ROV.Sample_Sensors();
+	//Start the ROV sampling sensors
+	ROV.Start_Sensors(&Pointers);
 
-	pthread_exit(NULL);
+	//Get user input, pretty much just wait for a q command
+	char a;
+	while (a != 'q')
+	{
+		cin >> a;
+
+	}
 	return 0;
 }
