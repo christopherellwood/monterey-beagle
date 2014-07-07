@@ -18,6 +18,7 @@
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <signal.h>
+#include <math.h>
 
 #define BUFFERLEN 64  //Length of receive buffer
 #define NUM_MOTORS 3  //Number of motors
@@ -25,6 +26,58 @@
 #define NUM_SERVOS 1  //Number of servos
 
 using namespace std;
+
+class Vector
+{
+private:
+
+public:
+	float x, y ,z;
+	float magnitude;
+	Vector()
+	{
+		x = 0;
+		y = 0;
+		z = 0;
+		magnitude = 0;
+	}
+	~Vector()
+	{
+	}
+	void Set(float x_, float y_, float z_)
+	{
+		x = x_;
+		y = y_;
+		z = z_;
+		Mag();
+	}
+	static Vector Cross(Vector a, Vector b)
+	{
+		Vector result;
+		result.x = (a.y * b.z) - (a.z * b.y);
+		result.y = (a.z * b.x) - (a.x * b.z);
+		result.z = (a.x * b.y) - (a.y * b.x);
+		result.Mag();
+		return result;
+	}
+	static float Dot(Vector a, Vector b)
+	{
+		float result;
+		result = a.x * b.x + a.y * b.y + a.z+ b.z;
+		return result;
+	}
+	void Mag()
+	{
+		magnitude = sqrt(x * x  + y * y + z * z);
+	}
+	void Norm()
+	{
+		x = (x / magnitude);
+		y = (y / magnitude);
+		z = (z / magnitude);
+		magnitude = 1;
+	}
+};
 
 class LSM303DLHC
 {
@@ -50,7 +103,9 @@ private:
 	char RawAccel[knumAccelRegisters];
 	char RawMag[knumMagRegisters];
 
+
 public:
+	Vector M, A;
 	LSM303DLHC()
 	{
 		MagAddress_ = 0;
@@ -58,6 +113,8 @@ public:
 		memset(RawMag, 0, knumMagRegisters);
 		memset(RawAccel, 0, knumAccelRegisters);
 		memset(i2cBusFileName, NULL, ki2cBusFileLength);
+		memset(&A, 0, sizeof(A));
+		memset(&M, 0, sizeof(M));
 	}
 	~LSM303DLHC()
 	{
@@ -95,7 +152,6 @@ public:
 			close(fp);
 		}
 	}
-
 	void ReadAccelRawData()
 	{
 		int fp;
@@ -109,7 +165,11 @@ public:
 				{
 					RawAccel[i] = i2c_smbus_read_word_data(fp, kAccelFirstDataReg + i);
 				}
-				//printf("%x%x, %x%x, %x%x\r",  RawAccel[0], RawAccel[1], RawAccel[2], RawAccel[3], RawAccel[4], RawAccel[5]);
+				A.Set((float)((int16_t)((RawAccel[0] << 8) + RawAccel[1])),
+					  (float)((int16_t)((RawAccel[2] << 8) + RawAccel[3])),
+					  (float)((int16_t)((RawAccel[4] << 8) + RawAccel[5]))
+					  );
+				//printf("%.6f, %.6f, %.6f              \r",  A.x, A.y, A.z);
 				close(fp);
 			}
 		}
@@ -128,15 +188,25 @@ public:
 				{
 					RawMag[i] = i2c_smbus_read_word_data(fp, kMagFirstDataReg + i);
 				}
-				//printf("%x%x, %x%x, %x%x\r", RawMag[1], RawMag[2], RawMag[3], RawMag[4], RawMag[5], RawMag[6]);
+				M.Set((float)((int16_t)((RawMag[1] << 8) + RawMag[2])),
+					  (float)((int16_t)((RawMag[3] << 8) + RawMag[4])),
+					  (float)((int16_t)((RawMag[5] << 8) + RawMag[6]))
+					  );
+				//printf("%.0f, %.0f, %.0f              \r",  M.x, M.y, M.z);
 				close(fp);
 			}
 		}
 	}
 	int GetHeading()
 	{
+		/* This algorithm is taken from ryantm at:
+		 * https://github.com/ryantm/LSM303DLH/blob/master/LSM303DLH/LSM303DLH.cpp
+		 */
 		int heading;
+		Vector temp = A;
+		temp.Norm();
 
+		Vector::Cross(A, M);
 
 
 		return heading;
@@ -470,7 +540,7 @@ class ROV_Manager
      */
 private:
     GPIO_Pins HardwarePinArray;
-    LSM303DLHC DirectionSensor;
+
     UDP_Connection *connection_;
     static const int kSensorWait = 20000; //uSeconds
 
@@ -600,6 +670,7 @@ private:
     }
 
 public:
+    LSM303DLHC DirectionSensor;
     int comms_thread_id;
     int sensor_thread_id;
 
@@ -637,7 +708,8 @@ public:
     {
     	while(1)
     	{
-    		DirectionSensor.ReadAccelRawData();
+    		//DirectionSensor.ReadAccelRawData();
+    		DirectionSensor.ReadMagRawData();
         	usleep(kSensorWait);
         	//Hardware pin to get loop timing
     		//HardwarePinArray.Pin[0].Set(1); //P8_10
