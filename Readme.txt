@@ -1,3 +1,6 @@
+Timer.c, Timer.h are from http://www.teuniz.net/Timer_code/
+i2c-dev.h is from the Linux Foundation
+
 To compile the beaglebone code in windows:
 
 Install Eclipse Kepler

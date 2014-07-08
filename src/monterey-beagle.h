@@ -16,8 +16,7 @@
 #include <fstream>
 #include "i2c-dev.h"
 #include <sys/ioctl.h>
-#include <sys/time.h>
-#include <signal.h>
+#include "timer.c"
 #include <math.h>
 
 #define BUFFERLEN 64  //Length of receive buffer
@@ -535,13 +534,14 @@ class ROV_Manager
      * to an array of integers representing motor speed, relay state, or servo
      * angle.
      *
-     * When not communicating with the operator, the manager polls the sensor
-     * collection.
+     * When not communicating with the operator, the manager has a 'sample
+     * sensor' function to collect sensor data for telemetry.
      */
 private:
     GPIO_Pins HardwarePinArray;
-
+    LSM303DLHC DirectionSensor;
     UDP_Connection *connection_;
+    int comms_thread_id;
     static const int kSensorWait = 20000; //uSeconds
 
     char sensor_string_[BUFFERLEN];
@@ -577,21 +577,6 @@ private:
                     m->Apply_Commands();
                 }
         }
-        return 0;
-    }
-    static void *Sensor_Handler(void *ptr)
-    {
-        /* This function is run as a separate thread to sample the sensors
-         * independently of other program activity.
-         */
-
-    	Pointer_Set * p;
-    	p = (Pointer_Set *)ptr;
-        UDP_Connection *c;
-        c = (UDP_Connection *)p->connection;
-        ROV_Manager *m;
-        m = (ROV_Manager *)p->manager;
-        m->Sample_Sensors();
         return 0;
     }
     void Parse_Command(char * rxdata)
@@ -670,10 +655,6 @@ private:
     }
 
 public:
-    LSM303DLHC DirectionSensor;
-    int comms_thread_id;
-    int sensor_thread_id;
-
     ROV_Manager(UDP_Connection * UDP_Ptr)
 	{
     	DirectionSensor.Configure(2, 0x1e, 0x19);
@@ -681,7 +662,6 @@ public:
 		bzero((char *) &sensor_string_, BUFFERLEN);
 		connection_ = UDP_Ptr;
 	    comms_thread_id = 0;
-	    sensor_thread_id = 0;
 	}
     ~ROV_Manager()
     {
@@ -695,27 +675,17 @@ public:
         comms_thread_id = pthread_create(&comms_thread, NULL,
                 Communications_Handler, (void *) ptr);
     }
-    void Start_Sensors(void * ptr)
-    {
-	/*
-	 * This function initiates a timer action to sample the sensors
-	 */
-        pthread_t sensor_thread;
-        sensor_thread_id = pthread_create(&sensor_thread, NULL,
-                Sensor_Handler, (void *) ptr);
-    }
     void Sample_Sensors()
     {
-    	while(1)
-    	{
-    		//DirectionSensor.ReadAccelRawData();
+    	//while(1)
+    	//{
+    		DirectionSensor.ReadAccelRawData();
     		DirectionSensor.ReadMagRawData();
-        	usleep(kSensorWait);
+        	//usleep(kSensorWait);
         	//Hardware pin to get loop timing
-    		//HardwarePinArray.Pin[0].Set(1); //P8_10
-        	//HardwarePinArray.Pin[0].Set(0); //P8_10
-    	}
-
+    		HardwarePinArray.Pin[0].Set(1); //P8_10
+        	HardwarePinArray.Pin[0].Set(0); //P8_10
+    	//}
     }
 }; //End ROV Manager Class
 
