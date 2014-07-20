@@ -3,7 +3,7 @@
 
 #define INPUTPORT 51000  //The port on which to listen for incoming data
 #define OUTPUTPORT 50000 //The port on which to send return data
-#define LOOP_PRD_MSEC 50 //Timed loop callback interval
+#define LOOP_PRD_MSEC 500 //Timed loop callback interval
 
 //Declare a UDP Connection for commands and telemetry
 UDP_Connection UDP(INPUTPORT, OUTPUTPORT);
@@ -14,7 +14,9 @@ ROV_Manager ROV(&UDP);
 //Pointers to UDP and ROV so they can be passed to the comms thread
 Pointer_Set Pointers;
 
-void timed_loop()
+//Periodic code runs in the timed function
+
+void timed_function()
 {
 	//Tell the ROV manager to sample the sensors
 	ROV.Sample_Sensors();
@@ -30,15 +32,16 @@ int main()
 	ROV.Start_Comms(&Pointers);
 
 	//Start a timer so the program runs in a controlled fashion
-	if(start_timer(LOOP_PRD_MSEC, &timed_loop))
-	{
-		printf("Timer error, exiting!\n");
-	}
+//	if(start_timer(LOOP_PRD_MSEC, &timed_function))
+//	{
+//		printf("Timer error, exiting!\n");
+//	}
 
 	//Idle while not sampling the sensors
 	while(1)
 	{
-		sleep(1);
+		usleep(2000);
+		ROV.Sample_Sensors();
 	}
 	stop_timer();
 	return 0;

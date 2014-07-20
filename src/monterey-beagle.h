@@ -5,19 +5,24 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sstream>
 #include <cstdlib>
 #include <pthread.h>
+#include <math.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#include <sstream>
 #include <iostream>
 #include <fstream>
 #include "i2c-dev.h"
-#include <sys/ioctl.h>
 #include "timer.c"
-#include <math.h>
+
 
 #define BUFFERLEN 64  //Length of receive buffer
 #define NUM_MOTORS 3  //Number of motors
@@ -25,6 +30,60 @@
 #define NUM_SERVOS 1  //Number of servos
 
 using namespace std;
+
+class Peripheral
+{
+private:
+	volatile unsigned int *baseaddress;
+public:
+	Peripheral()
+	{
+		baseaddress = 0;
+	}
+	~Peripheral()
+	{
+	}
+	volatile unsigned int * open_peripheral(__off_t baseAddress, size_t size)
+	{
+		int mem_fd;
+		char *peripheral_map;
+		volatile unsigned *peripheral;
+	    /* open /dev/mem */
+	    if ((mem_fd = open("/dev/mem", O_RDWR|O_SYNC) ) < 0) {
+	            printf("can't open /dev/mem \n");
+	            exit (-1);
+	    }
+
+	    /* mmap GPIO */
+	    peripheral_map = (char *)mmap(
+									0,
+									size,
+									PROT_READ|PROT_WRITE,
+									MAP_SHARED,
+									mem_fd,
+									baseAddress
+	    							);
+
+	    if (peripheral_map == MAP_FAILED) {
+	            printf("mmap error %d\n", (int)peripheral_map);
+	            exit (-1);
+	    }
+
+	    // Always use the volatile pointer!
+	    peripheral = (volatile unsigned int *)peripheral_map;
+	    return peripheral;
+	}
+	volatile unsigned int readByOffset(volatile unsigned int * peripheral, unsigned int offset)
+	{
+		volatile unsigned int x;
+		x = *(peripheral + (offset/4));
+		return x;
+	}
+	void writeByOffset(volatile unsigned int * peripheral, unsigned int offset, unsigned int value)
+	{
+		*(peripheral + (offset/4)) = value;
+	}
+};
 
 class Vector
 {
@@ -62,14 +121,14 @@ public:
 	static float Dot(Vector a, Vector b)
 	{
 		float result;
-		result = a.x * b.x + a.y * b.y + a.z+ b.z;
+		result = a.x * b.x + a.y * b.y + a.z * b.z;
 		return result;
 	}
 	void Mag()
 	{
 		magnitude = sqrt(x * x  + y * y + z * z);
 	}
-	void Norm()
+	void Normalize()
 	{
 		x = (x / magnitude);
 		y = (y / magnitude);
@@ -82,33 +141,69 @@ class LSM303DLHC
 {
 private:
 	static const int ki2cBusFileLength = 12;
+	static const char kReadbit = 0x80;
 
 	//Magnetometer Constants
+	static const char kMagControlReg = 0x00;
+	static const char kMagGainReg = 0x01;
+	static const char kMagConversionReg = 0x02;
+	static const char kMagFirstDataReg = 0x03;
+	static const char kMagTempRegH = 0x31;
+	static const char kMagTempRegL = 0x32;
+	static const int kEnableMagTemp = 0x8000;
+	static const int kMagDataRate15Hz = 0x1000;
+	static const int kMagDataRate30Hz = 0x1400;
+	static const int kMagDataRate75Hz = 0x1800;
+	static const int kMagGain1g3 = 0x2000;
+	static const int kMagGain1g9 = 0x4000;
+	static const int kMagGain2g5 = 0x6000;
+	static const int kMagGain4g0 = 0x8000;
+	static const int kMagGain4g7 = 0xa000;
+	static const int kMagGain5g6 = 0xc000;
+	static const int kMagGain8g1 = 0xe000;
+	static const int kMagContinuous = 0x0000;
+	static const int kMagSingle = 0x0100;
 	static const int knumMagRegisters = 7;
-	static const int kRunMag15Hz = 0x14;
-	static const int kMagControlReg = 0x00;
-	static const int kMagFirstDataReg = 0x02;
+
 
 	//Accelerometer Constants
-	static const int kRunAccel50Hz = 0x2700;
-	static const int kRunAccelFullScale = 0x4000;
-	static const int kAccelControlReg1 = 0x20;
-	static const int kAccelControlReg4 = 0x23;
-	static const int kAccelFirstDataReg = 0x28;
+	static const int kAccel200Hz = 0x6000;
+	static const int kAccel100Hz = 0x5000;
+	static const int kAccel50Hz = 0x4000;
+	static const int kAccelEnableZ = 0x0400;
+	static const int kAccelEnableY = 0x0200;
+	static const int kAccelEnableX = 0x0100;
+	static const int kAccelEnableAxes = 0x0700;
+	static const int kAccelRange2g = 0x0000;
+	static const int kAccelRange4g = 0x1000;
+	static const int kAccelRange8g = 0x2000;
+	static const int kAccelHighResMode = 0x0800;
+	static const char kAccelControlReg1 = 0x20;
+	static const char kAccelControlReg2 = 0x21;
+	static const char kAccelControlReg3 = 0x22;
+	static const char kAccelControlReg4 = 0x23;
+	static const char kAccelFirstDataReg = 0x28;
 	static const int knumAccelRegisters = 6;
+
 	char i2cBusFileName[ki2cBusFileLength];
 	int MagAddress_;
 	int AccelAddress_;
-	char RawAccel[knumAccelRegisters];
-	char RawMag[knumMagRegisters];
-
+	unsigned char temp_l;
+	unsigned char temp_h;
+	unsigned char RawAccel[knumAccelRegisters];
+	unsigned char RawMag[knumMagRegisters];
+	Vector Xaxis, Yaxis, Xhorizontal, Yhorizontal;
 
 public:
+	int16_t Temperature;
 	Vector M, A;
 	LSM303DLHC()
 	{
 		MagAddress_ = 0;
 		AccelAddress_ = 0;
+		temp_h = 0;
+		temp_l = 0;
+		Temperature = 0;
 		memset(RawMag, 0, knumMagRegisters);
 		memset(RawAccel, 0, knumAccelRegisters);
 		memset(i2cBusFileName, NULL, ki2cBusFileLength);
@@ -117,10 +212,11 @@ public:
 	}
 	~LSM303DLHC()
 	{
-
 	}
 	void Configure(int i2cBus, int MagAddress, int AccelAddress)
 	{
+		Xaxis.Set(1,0,0);
+		Yaxis.Set(0,1,0);
 		MagAddress_ = MagAddress;
 		AccelAddress_ = AccelAddress;
 		sprintf(i2cBusFileName, "/dev/i2c-%d", i2cBus);
@@ -130,9 +226,13 @@ public:
 		{
 			if (ioctl(fp, I2C_SLAVE, MagAddress_) >= 0)
 			{
+
+				i2c_smbus_write_word_data(fp, kMagControlReg,
+											kEnableMagTemp |
+											kMagDataRate30Hz);
+				i2c_smbus_write_word_data(fp, kMagGainReg, kMagGain1g3);
+				i2c_smbus_write_word_data(fp, kMagConversionReg, kMagContinuous);
 				printf("LSM303DLHC Magnetometer enabled on address %x\n", MagAddress_);
-				i2c_smbus_write_word_data(fp, kMagControlReg, kRunMag15Hz);
-				i2c_smbus_write_word_data(fp, kMagFirstDataReg, 0x00);
 			}
 			else
 			{
@@ -140,9 +240,16 @@ public:
 			}
 			if (ioctl(fp, I2C_SLAVE, AccelAddress_) >= 0)
 			{
+
+				i2c_smbus_write_word_data(fp, kAccelControlReg1,
+											kAccel100Hz |
+											kAccelEnableAxes);
+				i2c_smbus_write_word_data(fp, kAccelControlReg2, 0x0000);
+				i2c_smbus_write_word_data(fp, kAccelControlReg3, 0x0000);
+				i2c_smbus_write_word_data(fp, kAccelControlReg4,
+											kAccelHighResMode |
+											kAccelRange2g);
 				printf("LSM303DLHC Accelerometer enabled on address %x\n", AccelAddress_);
-				i2c_smbus_write_word_data(fp, kAccelControlReg1, kRunAccel50Hz);
-				i2c_smbus_write_word_data(fp, kAccelControlReg4, kRunAccelFullScale);
 			}
 			else
 			{
@@ -159,16 +266,17 @@ public:
 		{
 			if (ioctl(fp, I2C_SLAVE, AccelAddress_) >= 0)
 			{
-				int i;
-				for (i = 0; i < knumAccelRegisters; i++)
+				if (i2c_smbus_read_i2c_block_data(fp,
+												kReadbit | kAccelFirstDataReg,
+												knumAccelRegisters,
+												RawAccel) < 0)
 				{
-					RawAccel[i] = i2c_smbus_read_word_data(fp, kAccelFirstDataReg + i);
+					printf("Error reading Accelerometer\n");
 				}
-				A.Set((float)((int16_t)((RawAccel[0] << 8) + RawAccel[1])),
-					  (float)((int16_t)((RawAccel[2] << 8) + RawAccel[3])),
-					  (float)((int16_t)((RawAccel[4] << 8) + RawAccel[5]))
+				A.Set((float)((int16_t)(RawAccel[0] | (RawAccel[1] << 8)) >>4),
+					  (float)((int16_t)(RawAccel[2] | (RawAccel[3] << 8)) >>4),
+					  (float)((int16_t)(RawAccel[4] | (RawAccel[5] << 8)) >>4)
 					  );
-				//printf("%.6f, %.6f, %.6f              \r",  A.x, A.y, A.z);
 				close(fp);
 			}
 		}
@@ -183,32 +291,101 @@ public:
 			if (ioctl(fp, I2C_SLAVE, MagAddress_) >= 0)
 			{
 				int i;
-				for (i = 0; i < knumMagRegisters; i++)
+				if (i2c_smbus_read_i2c_block_data(fp,
+												kMagConversionReg,
+												knumMagRegisters,
+												RawMag) < 0)
 				{
-					RawMag[i] = i2c_smbus_read_word_data(fp, kMagFirstDataReg + i);
+					printf("Error reading magnetometer\n");
 				}
-				M.Set((float)((int16_t)((RawMag[1] << 8) + RawMag[2])),
-					  (float)((int16_t)((RawMag[3] << 8) + RawMag[4])),
-					  (float)((int16_t)((RawMag[5] << 8) + RawMag[6]))
+
+//				temp_h = i2c_smbus_read_word_data(fp, kMagTempRegH);
+//				temp_l = i2c_smbus_read_word_data(fp, kMagTempRegL);
+//				Temperature = (int16_t)((temp_h << 8) | temp_l);
+
+				M.Set((float)( (int16_t)((RawMag[1] << 8) | RawMag[2]) ),
+					  (float)( (int16_t)((RawMag[5] << 8) | RawMag[6]) ),
+					  (float)( (int16_t)((RawMag[3] << 8) | RawMag[4]) )
 					  );
 				//printf("%.0f, %.0f, %.0f              \r",  M.x, M.y, M.z);
 				close(fp);
 			}
 		}
 	}
-	int GetHeading()
+	float GetHeading()
 	{
-		/* This algorithm is taken from ryantm at:
-		 * https://github.com/ryantm/LSM303DLH/blob/master/LSM303DLH/LSM303DLH.cpp
+		/* Algorithm
+		 * 1) Project the north vector into the horizonatal plane:
+		 * As long as the platform is still, the acceleration vector is the
+		 * Down Vector.
+		 * Cross Magnetic Vector with Down Vector to get West Vector.
+		 * Cross Down and West to get the North Vector in the horizontal plane.
+		 *
+		 * 2) Project the coordinate axes into the horizontal plane:
+		 * Cross Yaxis with Down Vector to get X axis in horizontal plane
+		 * Cross Xaxis with down to get Y axis in horizontal plane
+		 *
+		 * 3) Get scalar values for the % facing vs perpendicular to North:
+		 * Dot X horizontal with North Vector to get the %facing to North
+		 * Dot Y horizontal with North Vector to get the %perpendicular
+		 * to North.
+		 *
+		 * 4) Calculate heading with trig function, and scale to degrees:
+		 * Arctan(perpendicular/facing) * 180/pi = heading in degrees
+		 * Arctan function gives answers +-180, so to get a heading ranging
+		 * from 0 to 360, do (heading<0) +=360
 		 */
-		int heading;
-		Vector temp = A;
-		temp.Norm();
 
-		Vector::Cross(A, M);
-
-
+		//1)
+		Vector Down = A;
+		Down.Normalize();
+		M.Normalize();
+		Vector W = Vector::Cross(M, Down);
+		W.Normalize();
+		Vector N = Vector::Cross(Down, W);
+		N.Normalize();
+		//2)
+		Xhorizontal = Vector::Cross(Yaxis, Down);
+		Xhorizontal.Normalize();
+		Yhorizontal = Vector::Cross(Down, Xaxis);
+		Yhorizontal.Normalize();
+		//3
+		float facingnorth;
+		float perpendicularnorth;
+		facingnorth = Vector::Dot(Xhorizontal, N);
+		perpendicularnorth = Vector::Dot(Yhorizontal, N);
+		//4
+		float heading;
+		heading = atan2(perpendicularnorth, facingnorth) * 180 / 3.14159;
+		if (heading < 0)
+		{
+			heading +=360;
+		}
 		return heading;
+	}
+	float GetRoll()
+	{
+		/* Algorithm
+		 * The arccos of two unit vectors is equal to the angle between them
+		 * http://en.wikipedia.org/wiki/Vector_projection
+		 */
+		float roll;
+		Vector Down = A;
+		Down.Normalize();
+		roll = acos(Vector::Dot(Yaxis, Down)) * -180 / 3.14159 + 90;
+		return roll;
+	}
+	float GetPitch()
+	{
+		/* Algorithm
+		 * The arccos of two unit vectors is equal to the angle between them
+		 * http://en.wikipedia.org/wiki/Vector_projection
+		 */
+		float pitch;
+		Vector Down = A;
+		Down.Normalize();
+		pitch = acos(Vector::Dot(Xaxis, Down)) * -180 / 3.14159 + 90;
+		return pitch;
 	}
 };
 
@@ -539,7 +716,7 @@ class ROV_Manager
      */
 private:
     GPIO_Pins HardwarePinArray;
-    LSM303DLHC DirectionSensor;
+
     UDP_Connection *connection_;
     int comms_thread_id;
     static const int kSensorWait = 20000; //uSeconds
@@ -655,6 +832,7 @@ private:
     }
 
 public:
+    LSM303DLHC DirectionSensor;
     ROV_Manager(UDP_Connection * UDP_Ptr)
 	{
     	DirectionSensor.Configure(2, 0x1e, 0x19);
@@ -677,15 +855,15 @@ public:
     }
     void Sample_Sensors()
     {
-    	//while(1)
-    	//{
+
     		DirectionSensor.ReadAccelRawData();
     		DirectionSensor.ReadMagRawData();
-        	//usleep(kSensorWait);
-        	//Hardware pin to get loop timing
+    		printf("Heading: %4.1f, Roll: %4.1f, Pitch: %4.1f    \r",
+					DirectionSensor.GetHeading(),
+					DirectionSensor.GetRoll(),
+					DirectionSensor.GetPitch());
     		HardwarePinArray.Pin[0].Set(1); //P8_10
         	HardwarePinArray.Pin[0].Set(0); //P8_10
-    	//}
     }
 }; //End ROV Manager Class
 
