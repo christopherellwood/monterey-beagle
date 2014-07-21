@@ -154,6 +154,7 @@ private:
 	static const int kMagDataRate15Hz = 0x1000;
 	static const int kMagDataRate30Hz = 0x1400;
 	static const int kMagDataRate75Hz = 0x1800;
+	static const int kMagDataRate220Hz = 0x1c00;
 	static const int kMagGain1g3 = 0x2000;
 	static const int kMagGain1g9 = 0x4000;
 	static const int kMagGain2g5 = 0x6000;
@@ -196,6 +197,7 @@ private:
 
 public:
 	int16_t Temperature;
+	float Roll, Pitch, Heading;
 	Vector M, A;
 	LSM303DLHC()
 	{
@@ -204,6 +206,9 @@ public:
 		temp_h = 0;
 		temp_l = 0;
 		Temperature = 0;
+		Roll = 0;
+		Pitch = 0;
+		Heading = 0;
 		memset(RawMag, 0, knumMagRegisters);
 		memset(RawAccel, 0, knumAccelRegisters);
 		memset(i2cBusFileName, NULL, ki2cBusFileLength);
@@ -229,7 +234,7 @@ public:
 
 				i2c_smbus_write_word_data(fp, kMagControlReg,
 											kEnableMagTemp |
-											kMagDataRate30Hz);
+											kMagDataRate15Hz);
 				i2c_smbus_write_word_data(fp, kMagGainReg, kMagGain1g3);
 				i2c_smbus_write_word_data(fp, kMagConversionReg, kMagContinuous);
 				printf("LSM303DLHC Magnetometer enabled on address %x\n", MagAddress_);
@@ -355,13 +360,12 @@ public:
 		facingnorth = Vector::Dot(Xhorizontal, N);
 		perpendicularnorth = Vector::Dot(Yhorizontal, N);
 		//4
-		float heading;
-		heading = atan2(perpendicularnorth, facingnorth) * 180 / 3.14159;
-		if (heading < 0)
+		Heading = atan2(perpendicularnorth, facingnorth) * 180 / 3.14159;
+		if (Heading < 0)
 		{
-			heading +=360;
+			Heading +=360;
 		}
-		return heading;
+		return Heading;
 	}
 	float GetRoll()
 	{
@@ -369,11 +373,11 @@ public:
 		 * The arccos of two unit vectors is equal to the angle between them
 		 * http://en.wikipedia.org/wiki/Vector_projection
 		 */
-		float roll;
+		float Roll;
 		Vector Down = A;
 		Down.Normalize();
-		roll = acos(Vector::Dot(Yaxis, Down)) * -180 / 3.14159 + 90;
-		return roll;
+		Roll = acos(Vector::Dot(Yaxis, Down)) * -180 / 3.14159 + 90;
+		return Roll;
 	}
 	float GetPitch()
 	{
@@ -381,11 +385,11 @@ public:
 		 * The arccos of two unit vectors is equal to the angle between them
 		 * http://en.wikipedia.org/wiki/Vector_projection
 		 */
-		float pitch;
+		float Pitch;
 		Vector Down = A;
 		Down.Normalize();
-		pitch = acos(Vector::Dot(Xaxis, Down)) * -180 / 3.14159 + 90;
-		return pitch;
+		Pitch = acos(Vector::Dot(Xaxis, Down)) * -180 / 3.14159 + 90;
+		return Pitch;
 	}
 };
 
@@ -720,6 +724,12 @@ private:
     UDP_Connection *connection_;
     int comms_thread_id;
     static const int kSensorWait = 20000; //uSeconds
+    static const int kHeadingSize = 1;
+    int headingCount_;
+    int headingSum_;
+    float headingAvg_;
+    float Heading[kHeadingSize];
+
 
     char sensor_string_[BUFFERLEN];
 
@@ -835,11 +845,15 @@ public:
     LSM303DLHC DirectionSensor;
     ROV_Manager(UDP_Connection * UDP_Ptr)
 	{
+    	headingSum_ = 0;
+    	headingCount_ = 0;
+    	headingAvg_ = 0;
     	DirectionSensor.Configure(2, 0x1e, 0x19);
     	HardwarePinArray.ReadHardwareConfig();
 		bzero((char *) &sensor_string_, BUFFERLEN);
 		connection_ = UDP_Ptr;
 	    comms_thread_id = 0;
+		bzero((float *) &Heading, kHeadingSize);
 	}
     ~ROV_Manager()
     {
@@ -858,12 +872,19 @@ public:
 
     		DirectionSensor.ReadAccelRawData();
     		DirectionSensor.ReadMagRawData();
-    		printf("Heading: %4.1f, Roll: %4.1f, Pitch: %4.1f    \r",
-					DirectionSensor.GetHeading(),
-					DirectionSensor.GetRoll(),
-					DirectionSensor.GetPitch());
-    		HardwarePinArray.Pin[0].Set(1); //P8_10
-        	HardwarePinArray.Pin[0].Set(0); //P8_10
+//    		headingSum_ -= Heading[headingCount_];
+//    		Heading[headingCount_] = DirectionSensor.GetHeading();
+//    		headingSum_ += Heading[headingCount_];
+//    		headingAvg_ = headingSum_ / kHeadingSize;
+//    		headingCount_++;
+//    		if (headingCount_ == kHeadingSize) headingCount_ = 0;
+
+    		sprintf(sensor_string_, "1 1 %4.0f 12 %4.0f %4.0f",
+    				DirectionSensor.GetHeading(),
+    				DirectionSensor.GetRoll(),
+    				DirectionSensor.GetPitch());
+    		connection_->txbuffer = sensor_string_;
+
     }
 }; //End ROV Manager Class
 
