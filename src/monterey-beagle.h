@@ -31,6 +31,341 @@
 
 using namespace std;
 
+class SensorData
+{
+private:
+	static const int kMaxArraySize = 255;
+	float sum_;
+	int arraysize_;
+	int count_;
+	float data_[kMaxArraySize];
+	float conversionfactor_;
+
+public:
+
+	float average;
+	SensorData()
+	{
+		conversionfactor_ = 1;
+		arraysize_ = kMaxArraySize;
+		average = 0;
+		sum_ = 0;
+		count_ = 0;
+		memset(data_, 0, kMaxArraySize);
+	}
+	~SensorData()
+	{
+	}
+	void Setup(int SampleArraySize, float ConversionFactor)
+	{
+		conversionfactor_ = ConversionFactor;
+		arraysize_ = SampleArraySize;
+	}
+	void Update(float value)
+	{
+		value = value * conversionfactor_;
+		sum_ -= data_[count_];
+		data_[count_] = value;
+		sum_ += value;
+		average = sum_ / arraysize_;
+		count_++;
+		if (count_ == arraysize_)
+		{
+			count_ = 0;
+		}
+	}
+};
+
+class ADS1115
+{
+private:
+	static const char kConversionReg = 0x00;
+	static const char kConfigReg = 0x01;
+	static const char kLowThresholdReg = 0x02;
+	static const char kHighThresholdReg = 0x03;
+	static const int kmax16bitvalue = 65536;
+
+	//Converter Configuration Constants
+	static const int kDoSingleConversion = 0x8000;
+	static const int kMuxControlMask     = 0xFF8F;
+	static const int kRateControlMask     = 0x1FFF;
+	//Multiplexer setting
+	static const int kDiff_Ain0_1 = 0x0000;
+	static const int kDiff_Ain0_3 = 0x0010;
+	static const int kDiff_Ain1_3 = 0x0020;
+	static const int kDiff_Ain2_3 = 0x0030;
+	static const int kSE_Ain0     = 0x0040;
+	static const int kSE_Ain1     = 0x0050;
+	static const int kSE_Ain2     = 0x0060;
+	static const int kSE_Ain3     = 0x0070;
+
+	//Programmable gain amplifier
+	static const int kMax6v144 = 0x0000;
+	static const int kMax4v096 = 0x0002;
+	static const int kMax2v048 = 0x0004;
+	static const int kMax1v024 = 0x0006;
+	static const int kMax0v512 = 0x0008;
+	static const int kMax0v256 = 0x000A;
+
+	//Mode
+	static const int kContinuousMode = 0x0000;
+	static const int kPowerDownMode  = 0x0001;
+
+	//Sample Rate
+	static const int kRate8Hz    = 0x0000;
+	static const int kRate16Hz   = 0x2000;
+	static const int kRate32Hz   = 0x4000;
+	static const int kRate64Hz   = 0x6000;
+	static const int kRate128Hz  = 0x8000;
+	static const int kRate250Hz  = 0xA000;
+	static const int kRate475Hz  = 0xC000;
+	static const int kRate860Hz  = 0xE000;
+
+	//Comparator Settings
+	static const int kCompNormal = 0x0000;
+	static const int kCompWindow = 0x1000;
+	static const int kCompActHigh= 0x0800;
+	static const int kCompActLow = 0x0000;
+	static const int kCompLatch  = 0x0400;
+	static const int kCompNoLatch= 0x0000;
+	static const int kCompFilter1= 0x0000;
+	static const int kCompFilter2= 0x0100;
+	static const int kCompFilter4= 0x0200;
+	static const int kCompDisable= 0x0300;
+
+	enum
+	{
+		ReadChannel0 = 0,
+		ReadChannel1,
+		ReadChannel2,
+		ReadChannel3
+	};
+	enum
+	{
+		Rate8Hz = 0,
+		Rate16Hz,
+		Rate32Hz,
+		Rate64Hz,
+		Rate128Hz,
+		Rate250Hz,
+		Rate475Hz,
+		Rate860Hz,
+	};
+
+	static const int kDataLength = 2;
+
+	int configuration_;
+	int Address_;
+	static const int ki2cBusFileLength = 12;
+	char i2cBusFileName[ki2cBusFileLength];
+	unsigned char data_[kDataLength];
+	int channel_;
+	int channel0offset;
+	int channel1offset;
+	int channel2offset;
+	int channel3offset;
+
+public:
+	int channel0;
+	int channel1;
+	int channel2;
+	int channel3;
+
+	ADS1115()
+	{
+		memset(i2cBusFileName, NULL, ki2cBusFileLength);
+		memset(data_, NULL, kDataLength);
+		Address_ = 0;
+		channel0 = 0;
+		channel1 = 0;
+		channel2 = 0;
+		channel3 = 0;
+		channel0offset = 0;
+		channel1offset = 0;
+		channel2offset = 0;
+		channel3offset = 0;
+		channel_ = 0;
+		configuration_ = 0;
+	}
+	~ADS1115()
+	{
+	}
+	void Configure(int i2cBus, int Address)
+	{
+		Address_ = Address;
+		sprintf(i2cBusFileName, "/dev/i2c-%d", i2cBus);
+		int fp;
+		//default configuration
+		configuration_ = kSE_Ain0|kMax2v048|kContinuousMode|kRate128Hz|kCompDisable;
+
+		fp = open(i2cBusFileName, O_RDWR);
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+			{
+				i2c_smbus_write_word_data(fp, kConfigReg, configuration_);
+				printf("ADS1115 ADC enabled on address %x\n", Address_);
+			}
+			else
+			{
+				printf("Error communicating with ADS1115 ADC\n");
+			}
+			close(fp);
+		}
+	}
+	int ReadConfig()
+	{
+		int config = 0;
+		int fp;
+		fp = open(i2cBusFileName, O_RDWR);
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+			{
+				i2c_smbus_read_i2c_block_data(fp,
+										kConfigReg,
+										kDataLength,
+										data_);
+				config = (int)((data_[1]) | data_[0] << 8);
+				close(fp);
+			}
+		}
+		return config;
+	}
+	int ReadData()
+	{
+		int fp;
+		int * channelptr;
+		int * offsetptr;
+		fp = open(i2cBusFileName, O_RDWR);
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+			{
+				i2c_smbus_read_i2c_block_data(fp,
+						kConversionReg,
+										kDataLength,
+										data_);
+				switch (channel_)
+				{
+				case ReadChannel0:
+					channelptr = &channel0;
+					offsetptr = &channel0offset;
+					break;
+				case ReadChannel1:
+					channelptr = &channel1;
+					offsetptr = &channel1offset;
+					break;
+				case ReadChannel2:
+					channelptr = &channel2;
+					offsetptr = &channel2offset;
+					break;
+				case ReadChannel3:
+					channelptr = &channel3;
+					offsetptr = &channel3offset;
+					break;
+				default:
+					break;
+				}
+				*channelptr = (int)((data_[1]) | data_[0] << 8);
+				*channelptr += *offsetptr;
+				close(fp);
+			}
+		}
+		return *channelptr;
+	}
+	int GetMuxChannel()
+	{
+		return channel_;
+	}
+	void SetMuxChannel(int channel0_to_3)
+	{
+		if ((channel0_to_3 >= 0) || (channel0_to_3 <= 3))
+		{
+			//Reset mux control bits
+			configuration_ &= kMuxControlMask;
+			int fp;
+			fp = open(i2cBusFileName, O_RDWR);
+			if (fp >= 0)
+			{
+				if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+				{
+
+					switch(channel0_to_3)
+					{
+						case ReadChannel0:
+							configuration_ |= kSE_Ain0;
+							break;
+						case ReadChannel1:
+							configuration_ |= kSE_Ain1;
+							break;
+						case ReadChannel2:
+							configuration_ |= kSE_Ain2;
+							break;
+						case ReadChannel3:
+							configuration_ |= kSE_Ain3;
+							break;
+						default:
+							configuration_ |= kSE_Ain0;
+							break;
+					}
+					i2c_smbus_write_word_data(fp, kConfigReg, configuration_);
+					channel_ = channel0_to_3;
+					close(fp);
+				}
+			}
+		}
+	}
+	void SetConversionRate(int rate0_to_7)
+	{
+		if ((rate0_to_7 >= 0) || (rate0_to_7 <= 7))
+		{
+			//Reset rate control bits
+			configuration_ &= kRateControlMask;
+			int fp;
+			fp = open(i2cBusFileName, O_RDWR);
+			if (fp >= 0)
+			{
+				if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+				{
+					switch(rate0_to_7)
+					{
+						case Rate8Hz:
+							configuration_ |= kRate8Hz;
+							break;
+						case Rate16Hz:
+							configuration_ |= kRate16Hz;
+							break;
+						case Rate32Hz:
+							configuration_ |= kRate32Hz;
+							break;
+						case Rate64Hz:
+							configuration_ |= kRate64Hz;
+							break;
+						case Rate128Hz:
+							configuration_ |= kRate128Hz;
+							break;
+						case Rate250Hz:
+							configuration_ |= kRate250Hz;
+							break;
+						case Rate475Hz:
+							configuration_ |= kRate475Hz;
+							break;
+						case Rate860Hz:
+							configuration_ |= kRate860Hz;
+							break;
+						default:
+							configuration_ |= kRate128Hz;
+							break;
+					}
+					i2c_smbus_write_word_data(fp, kConfigReg, configuration_);
+					close(fp);
+				}
+			}
+		}
+	}
+};
+
 class Peripheral
 {
 private:
@@ -234,7 +569,7 @@ public:
 
 				i2c_smbus_write_word_data(fp, kMagControlReg,
 											kEnableMagTemp |
-											kMagDataRate15Hz);
+											kMagDataRate75Hz);
 				i2c_smbus_write_word_data(fp, kMagGainReg, kMagGain1g3);
 				i2c_smbus_write_word_data(fp, kMagConversionReg, kMagContinuous);
 				printf("LSM303DLHC Magnetometer enabled on address %x\n", MagAddress_);
@@ -265,6 +600,13 @@ public:
 	}
 	void ReadAccelRawData()
 	{
+		/* Or the Readbit (0x80 or 0b1000_0000) to the address of the first
+		 * data register because Page 20 of the LSM303DLHC datasheet says:
+		 * "In order to read multiple bytes, it is necessary to assert the most
+		 * significant bit of the subaddress field. In other words, SUB(7) must
+		 * be equal to 1 while SUB(6-0) represents the address of the first
+		 * register to be read."
+		 */
 		int fp;
 		fp = open(i2cBusFileName, O_RDWR);
 		if (fp >= 0)
@@ -309,8 +651,8 @@ public:
 //				Temperature = (int16_t)((temp_h << 8) | temp_l);
 
 				M.Set((float)( (int16_t)((RawMag[1] << 8) | RawMag[2]) ),
-					  (float)( (int16_t)((RawMag[5] << 8) | RawMag[6]) ),
-					  (float)( (int16_t)((RawMag[3] << 8) | RawMag[4]) )
+					  (float)( (int16_t)((RawMag[3] << 8) | RawMag[4]) ),
+					  (float)( (int16_t)((RawMag[5] << 8) | RawMag[6]) )
 					  );
 				//printf("%.0f, %.0f, %.0f              \r",  M.x, M.y, M.z);
 				close(fp);
@@ -720,15 +1062,12 @@ class ROV_Manager
      */
 private:
     GPIO_Pins HardwarePinArray;
-
     UDP_Connection *connection_;
+    LSM303DLHC DirectionSensor;
+    ADS1115 ADC;
     int comms_thread_id;
     static const int kSensorWait = 20000; //uSeconds
-    static const int kHeadingSize = 1;
-    int headingCount_;
-    int headingSum_;
-    float headingAvg_;
-    float Heading[kHeadingSize];
+
 
 
     char sensor_string_[BUFFERLEN];
@@ -842,18 +1181,26 @@ private:
     }
 
 public:
-    LSM303DLHC DirectionSensor;
+    SensorData Heading;
+    SensorData Roll;
+    SensorData Pitch;
+    SensorData Voltage;
+
     ROV_Manager(UDP_Connection * UDP_Ptr)
 	{
-    	headingSum_ = 0;
-    	headingCount_ = 0;
-    	headingAvg_ = 0;
+    	/*Hardcoded Values*/
     	DirectionSensor.Configure(2, 0x1e, 0x19);
+    	ADC.Configure(2, 0x48);
+    	Heading.Setup(10, 1);
+    	Roll.Setup(5, 1);
+    	Pitch.Setup(5, 1);
+    	Voltage.Setup(10, .0006875);
+    	/*There are more hardcoded values in the hardware config*/
     	HardwarePinArray.ReadHardwareConfig();
+
 		bzero((char *) &sensor_string_, BUFFERLEN);
 		connection_ = UDP_Ptr;
 	    comms_thread_id = 0;
-		bzero((float *) &Heading, kHeadingSize);
 	}
     ~ROV_Manager()
     {
@@ -869,22 +1216,21 @@ public:
     }
     void Sample_Sensors()
     {
+//		DirectionSensor.ReadMagRawData();
+//		DirectionSensor.ReadAccelRawData();
+    	Voltage.Update((float)ADC.ReadData());
+    	//ADC.SetMuxChannel(0);
 
-    		DirectionSensor.ReadAccelRawData();
-    		DirectionSensor.ReadMagRawData();
-//    		headingSum_ -= Heading[headingCount_];
-//    		Heading[headingCount_] = DirectionSensor.GetHeading();
-//    		headingSum_ += Heading[headingCount_];
-//    		headingAvg_ = headingSum_ / kHeadingSize;
-//    		headingCount_++;
-//    		if (headingCount_ == kHeadingSize) headingCount_ = 0;
+//		sprintf(sensor_string_, "1 1 %4.0f 12 %4.0f %4.0f",
+//				DirectionSensor.GetHeading(),
+//				DirectionSensor.GetRoll(),
+//				DirectionSensor.GetPitch());
 
-    		sprintf(sensor_string_, "1 1 %4.0f 12 %4.0f %4.0f",
-    				DirectionSensor.GetHeading(),
-    				DirectionSensor.GetRoll(),
-    				DirectionSensor.GetPitch());
-    		connection_->txbuffer = sensor_string_;
+		sprintf(sensor_string_, "1 1 360 %7.2f 90 90",
+				Voltage.average);
+    	connection_->txbuffer = sensor_string_;
 
     }
+
 }; //End ROV Manager Class
 
