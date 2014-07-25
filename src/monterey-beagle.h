@@ -27,7 +27,7 @@
 #define BUFFERLEN 64  //Length of receive buffer
 #define NUM_MOTORS 3  //Number of motors
 #define NUM_RELAYS 3  //Number of relays
-#define NUM_SERVOS 1  //Number of servos
+#define NUM_SERVOS 3  //Number of servos
 
 using namespace std;
 
@@ -1030,6 +1030,7 @@ public:
         receive_successful = recvfrom(socketnum_, rxbuffer, BUFFERLEN, 0,
                             (struct sockaddr *) &client_addr_,
                             &client_addr_len_);
+        //printf("%s \r", rxbuffer);
     }
     void SendData()
     {
@@ -1066,10 +1067,6 @@ private:
     LSM303DLHC DirectionSensor;
     ADS1115 ADC;
     int comms_thread_id;
-    static const int kSensorWait = 20000; //uSeconds
-
-
-
     char sensor_string_[BUFFERLEN];
 
     int motor[NUM_MOTORS];
@@ -1123,7 +1120,7 @@ private:
         int intRxdata[NUM_MOTORS + NUM_RELAYS + NUM_SERVOS];
         std::istringstream iss(rxdata);
         while((iss >> intRxdata[i]) &&
-              (i < (NUM_MOTORS + NUM_RELAYS + NUM_SERVOS - 1)))
+              (i < (NUM_MOTORS + NUM_RELAYS + NUM_SERVOS)))
         {
             if (i < NUM_MOTORS)
             {
@@ -1141,22 +1138,22 @@ private:
             }
             i++;
         }
-    /*    printf("\nMotors: ");
-        for(i=0;i<NUM_MOTORS; i++)
-        {
-    			printf("%d ", mgr->->motor[i]);
-    		}
-    			printf("\nRelays: ");
-    		for(i=0;i<NUM_RELAYS; i++)
-    		{
-    			printf("%d ", mgr->->relay[i]);
-    		}
-    			printf("\nServos: ");
-    		for(i=0;i<NUM_SERVOS; i++)
-    		{
-    			printf("%d ", mgr->->servo[i]);
-    		}
-        }*/
+//		printf("\nMotors: ");
+//		for(i=0;i<NUM_MOTORS; i++)
+//		{
+//			printf("%d ", motor[i]);
+//		}
+//			printf("\nRelays: ");
+//		for(i=0;i<NUM_RELAYS; i++)
+//		{
+//			printf("%d ", relay[i]);
+//		}
+//			printf("\nServos: ");
+//		for(i=0;i<NUM_SERVOS; i++)
+//		{
+//			printf("%d ", servo[i]);
+//		}
+
         return;
     }
     void Apply_Commands()
@@ -1175,7 +1172,13 @@ private:
     	for (i=0; i<NUM_SERVOS; i++)
     	{
     		char * a = new char[12];
-    		sprintf(a, "%i", motor[i]*1000);
+    		int servopwm = 0;
+    		//Monterey sends the servo deflection in degrees
+    		//This line converts to microseconds
+    		servopwm = 900 + (int)round(((float)servo[i]/180) * 1200);
+    		//The pwm in the beaglebone needs it in nanoseconds
+    		sprintf(a, "%i", servopwm * 1000);
+    		//printf("%s \r", a);
     		HardwarePinArray.ServoPWM[i].Set_Duty(a);
     	}
     }
