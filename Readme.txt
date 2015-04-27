@@ -35,3 +35,5 @@ optargs=quiet capemgr.disable_partno=BB-BONELT-HDMI,BB-BONELT-HDMIN capemgr.enab
 [ESC]:wq[ENTER]
 
 $ umount /mnt/card
+
+To run the program, load PWM_Pins.cfg and Disc_Pins.cfg into the same folder as the the monterey-beagle executable and ./monterey-beagle.

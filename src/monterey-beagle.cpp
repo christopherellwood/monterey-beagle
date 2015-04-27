@@ -15,7 +15,6 @@ ROV_Manager ROV(&UDP);
 Pointer_Set Pointers;
 
 //Periodic code runs in the timed function
-
 void timed_function()
 {
 	//Tell the ROV manager to sample the sensors
@@ -27,6 +26,8 @@ int main()
 	//Set the values in the pointer structure
 	Pointers.connection = &UDP;
 	Pointers.manager = &ROV;
+
+	ROV.Setup_Hardware_with_Magic_Numbers();
 
 	//Start an even driven communications thread
 	ROV.Start_Comms(&Pointers);

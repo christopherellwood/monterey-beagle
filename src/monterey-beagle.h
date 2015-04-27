@@ -23,13 +23,219 @@
 #include "i2c-dev.h"
 #include "timer.c"
 
-
 #define BUFFERLEN 64  //Length of receive buffer
-#define NUM_MOTORS 3  //Number of motors
-#define NUM_RELAYS 3  //Number of relays
-#define NUM_SERVOS 3  //Number of servos
 
 using namespace std;
+//TODO: Break up into header files
+class PCA9685
+{
+	/*The PCA9685 shows up as two addresses. One is an individual address based
+	 *on the device hardware straps, and ranges from 0x40 to 0x7f. The other is
+	 *an all call, 0x70, which addresses all PCA9685's on the bus.*/
+private:
+	static const int ki2cBusFileLength 	= 12;
+	static const float 	kClkFreq = 25000000;	//PCA9685 internal oscillator
+	static const int 	kOutputFreqMin 	= 40;	//given in datasheet
+	static const int 	kOutputFreqMax 	= 1000;	//given in datasheet
+	static const float 	kServoMaxSteps 	= 246;	//Output is at 100% throttle
+	static const short 	kServoMinSteps 	= 184;	//Output is at 0% throttle
+	static const short 	kServoDelay		= 0;	//Delay before rising edge
+	static const int 	kServoInitSteps = 0x0133;//Initial Throttle Setting
+	static const int 	kStepsPerCycle 	= 4096; //Total steps for 12bit counter
+	static const int 	kNumServos 		= 16;	//Number of outputs on PCA9685
+
+	/*Register Addresses*/
+	static const short kMode1Reg 	 = 0x00;//Starts and stops outputs
+	static const short kMode2Reg 	 = 0x01;//Not used
+	static const short kSub1Reg 	 = 0x02;//
+	static const short kSub2Reg 	 = 0x03;//
+	static const short kSub3Reg 	 = 0x04;//
+	static const short kAllCallReg	 = 0x05;//
+	static const short kPrescaleReg	 = 0xFE; //Prescale sets output frequency
+	static const short kOn_Ch0_L_Reg = 0x06;//When ch0 turns on, bits 0:7
+	static const short kOn_Ch0_H_Reg = 0x07;//When ch0 turns on, bits 8:12
+	static const short kOff_Ch0_L_Reg= 0x08;//When ch0 turns off, bits 0:7
+	static const short kOff_Ch0_H_Reg= 0x09;//When ch0 turns off, bits 8:12
+											//The rest of the channels controls
+	static const short kAddressOffset= 0x04;//are each offset by 4*n from ch0
+
+	/*Commands*/
+	static const int kZero			= 0x0000;
+	static const int kStartOsc 		= 0x0100;
+	static const int kStopOsc 		= 0x1100;
+	static const int kMode2Default	= 0x0400;
+	static const int kServoFreq		= 46;	//Tune to get 50Hz out
+	static const int kAllCallDef	= 0xe000;
+	static const int kFullOnOff		= 0x1000;
+
+	short servo[kNumServos]; //There are 16 pwm outputs
+
+	int Address_;
+	float frequency_;
+	char i2cBusFileName[ki2cBusFileLength];
+
+	void WriteOutput(short addr, short data)
+	{
+		//printf("%02x, %04x\n", addr, data);
+		int fp;
+		fp = open(i2cBusFileName, O_RDWR);
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+			{
+				i2c_smbus_write_word_data(fp, addr, data);
+				close(fp);
+			}
+		}
+	}
+	short OutputOffLAddr(int ServoNum)
+	{
+		short v;
+		v = (short)((short)ServoNum * kAddressOffset + kOff_Ch0_L_Reg);
+		return v;
+	}
+	short OutputOffHAddr(int ServoNum)
+	{
+		short v;
+		v = (short)((short)ServoNum * kAddressOffset + kOff_Ch0_H_Reg);
+		return  v;
+	}
+	short OutputOnLAddr(int ServoNum)
+	{
+		short v;
+		v = (short)((short)ServoNum * kAddressOffset + kOn_Ch0_L_Reg);
+		return  v;
+	}
+	short OutputOnHAddr(int ServoNum)
+	{
+		short v;
+		v = (short)((short)ServoNum * kAddressOffset + kOn_Ch0_H_Reg);
+		return  v;
+	}
+	void SetPWM(int PWMNum, short OnVal, short OffVal)
+	{
+		WriteOutput(OutputOnLAddr(PWMNum),  (short)(OnVal  << 8));
+		WriteOutput(OutputOnHAddr(PWMNum),  (short) OnVal		);
+		WriteOutput(OutputOffLAddr(PWMNum), (short)(OffVal << 8));
+		WriteOutput(OutputOffHAddr(PWMNum), (short) OffVal		);
+	}
+	void SetOFF(int PWMNum, short OffVal)
+	{
+		WriteOutput(OutputOffLAddr(PWMNum), (short)(OffVal << 8));
+		WriteOutput(OutputOffHAddr(PWMNum), (short) OffVal		);
+	}
+	void SetON(int PWMNum, short OnVal)
+	{
+		WriteOutput(OutputOnLAddr(PWMNum),  (short)(OnVal  << 8));
+		WriteOutput(OutputOnHAddr(PWMNum),  (short) OnVal		);
+	}
+public:
+	PCA9685()
+	{
+		Address_ = 0;
+		memset(i2cBusFileName, NULL, ki2cBusFileLength);
+		memset(servo, NULL, kNumServos);
+		frequency_ = (float)kServoFreq;
+	}
+	~PCA9685()
+	{
+	}
+	void RC_PWM_Setup(int i2cBus, int Address)
+	{
+		Address_ = Address;
+		short prescale = 0;
+		prescale = (short)round(kClkFreq / (kStepsPerCycle * kServoFreq));
+		prescale = prescale << 8;
+
+		sprintf(i2cBusFileName, "/dev/i2c-%d", i2cBus);
+		int fp;
+		fp = open(i2cBusFileName, O_RDWR);
+		if (fp >= 0)
+		{
+			if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+			{
+				i2c_smbus_write_word_data(fp, kMode1Reg, kStopOsc);
+				i2c_smbus_write_word_data(fp, kMode2Reg, kMode2Default);
+				i2c_smbus_write_word_data(fp, kSub1Reg, kZero);
+				i2c_smbus_write_word_data(fp, kSub2Reg, kZero);
+				i2c_smbus_write_word_data(fp, kSub3Reg, kZero);
+				i2c_smbus_write_word_data(fp, kPrescaleReg, prescale);
+				i2c_smbus_write_word_data(fp, kMode1Reg, kStartOsc);
+				close (fp);
+				int i;
+				for (i = 0; i < kNumServos; i++)
+				{
+					//Init motors/servos to initialize at 1500us
+					SetPWM(i, kServoDelay, kServoInitSteps);
+				}
+				printf("PCA9685 PWM Controller enabled on address %x\n", Address_);
+			}
+			else
+			{
+				printf("Error communicating with PCA9685 PWM Controller\n");
+			}
+		}
+	}
+	void SetFrequency(float frequency)
+	{
+		//Datasheet says frequency min/max is 40/1000
+		if ((frequency >= kOutputFreqMin) && (frequency <= kOutputFreqMax))
+		{
+			short prescale = 0;
+			prescale = (short)round(kClkFreq / (kStepsPerCycle * frequency));
+			frequency_ = frequency;
+			int fp;
+			fp = open(i2cBusFileName, O_RDWR);
+			if (fp >= 0)
+			{
+				if (ioctl(fp, I2C_SLAVE, Address_) >= 0)
+				{
+					i2c_smbus_write_word_data(fp, kMode1Reg, kStopOsc);
+					i2c_smbus_write_word_data(fp, kPrescaleReg, prescale);
+					i2c_smbus_write_word_data(fp, kMode1Reg, kStartOsc);
+					close(fp);
+				}
+			}
+		}
+		else
+		{
+			printf("Error! Frequency must be between 40 and 1000Hz.\n");
+		}
+	}
+	void Set_RC_Throttle(int ServoNum, float Percent)
+	{
+		if ((ServoNum >= 0) && (ServoNum <=15))
+		{
+			servo[ServoNum] = (short)round((Percent / 100) * kServoMaxSteps);
+			servo[ServoNum] = kServoDelay + kServoMinSteps + servo[ServoNum];
+			SetOFF(ServoNum, servo[ServoNum]);
+		}
+		else
+		{
+			printf("Error! Servo number must be between 0 and 15.\n");
+		}
+	}
+	void SetThrottle_us(int ServoNum, int onTime)
+	{
+		short counts;
+		counts = (float)onTime * frequency_ * (float)kStepsPerCycle / 1000000;
+		SetPWM(ServoNum, kServoDelay, counts);
+	}
+	void Set_Discrete(int ServoNum, int value)
+	{
+		switch (value)
+		{
+		case 0:
+			WriteOutput(OutputOnHAddr(ServoNum), 0x0000);
+			WriteOutput(OutputOffHAddr(ServoNum), 0x1000);
+			break;
+		case 1:
+			WriteOutput(OutputOffHAddr(ServoNum), 0x0000);
+			WriteOutput(OutputOnHAddr(ServoNum), 0x1000);
+			break;
+		}
+	}
+};
 
 class SensorData
 {
@@ -40,12 +246,14 @@ private:
 	int count_;
 	float data_[kMaxArraySize];
 	float conversionfactor_;
+	float offset_;
 
 public:
 
 	float average;
 	SensorData()
 	{
+		offset_ = 0;
 		conversionfactor_ = 1;
 		arraysize_ = kMaxArraySize;
 		average = 0;
@@ -56,14 +264,15 @@ public:
 	~SensorData()
 	{
 	}
-	void Setup(int SampleArraySize, float ConversionFactor)
+	void Setup(int SampleArraySize, float ConversionFactor, float offset)
 	{
 		conversionfactor_ = ConversionFactor;
 		arraysize_ = SampleArraySize;
+		offset_ = offset;
 	}
 	void Update(float value)
 	{
-		value = value * conversionfactor_;
+		value = value * conversionfactor_ + offset_;
 		sum_ -= data_[count_];
 		data_[count_] = value;
 		sum_ += value;
@@ -166,6 +375,7 @@ private:
 	int channel3offset;
 
 public:
+	static const int knum_channels = 4;
 	int channel0;
 	int channel1;
 	int channel2;
@@ -651,10 +861,10 @@ public:
 //				Temperature = (int16_t)((temp_h << 8) | temp_l);
 
 				M.Set((float)( (int16_t)((RawMag[1] << 8) | RawMag[2]) ),
-					  (float)( (int16_t)((RawMag[3] << 8) | RawMag[4]) ),
-					  (float)( (int16_t)((RawMag[5] << 8) | RawMag[6]) )
+					  (float)( (int16_t)((RawMag[5] << 8) | RawMag[6]) ),
+					  (float)( (int16_t)((RawMag[3] << 8) | RawMag[4]) )
 					  );
-				//printf("%.0f, %.0f, %.0f              \r",  M.x, M.y, M.z);
+				//printf("%04.2f, %04.2f, %04.2f\n", M.x, M.y, M.z);
 				close(fp);
 			}
 		}
@@ -738,20 +948,93 @@ public:
 class IO_Pin
 {
 private:
-	static const int kdirectionlength = 4; //Lengths need to be 1 longer then
-	static const int kvaluelength = 2;     //the string to accommodate a NULL
-	static const int kIDlength = 4;        //character for string operations
+	static const int internal = 0; 			//denotes PWM pins on AM3359 chip
+	static const int external = 1; 			//Output on PCA9685 I2C expansion
+	static const int kdirectionlength = 4; 	//Lengths need to be 1 longer then
+	static const int kvaluelength = 2;     	//the string to accommodate a NULL
+	static const int kIDlength = 4;        	//character for string operations
 	static const int kDiscretePinfilelength = 64;
 	static const int knumAM335xGPIO = 128;
+	static const int knumParameters = 6;	//# of config parameters
+	int hardwaretype_;
+	int invert_;
+	int intValue_;
+	int id_;
 	char direction_[kdirectionlength];
 	char directionfile[kDiscretePinfilelength];
 	char valuefile[kDiscretePinfilelength];
 	char ID_[kIDlength];
 	char value_[kvaluelength];
+	PCA9685 *extPin;
 
+	int CheckInvert(int val)
+	{
+		if (invert_)
+		{
+			switch (val)
+			{
+			case 0:
+				val = 1;
+				break;
+			default:
+				val = 0;
+				break;
+			}
+		}
+		return val;
+	}
+	void ConfigureInternal()
+	{
+		//initialize and zero-ize variables
+		FILE * fp;
+		bzero(directionfile, kDiscretePinfilelength);
+		bzero(valuefile, kDiscretePinfilelength);
+
+		//set access filenames
+		sprintf(value_, "%s", CheckInvert(intValue_));
+		sprintf(directionfile, "/sys/class/gpio/gpio%s/direction", ID_);
+		sprintf(valuefile, "/sys/class/gpio/gpio%s/value", ID_);
+
+		//create files in filesystem to write to
+		fp = fopen("/sys/class/gpio/export", "ab");
+		rewind(fp);
+		fwrite(ID_, sizeof(char), kIDlength, fp);
+		fclose(fp);
+
+		//set direction
+		fp = fopen(directionfile, "rb+");
+		rewind(fp);
+		fwrite(direction_, sizeof(char), kdirectionlength, fp);
+		fclose(fp);
+
+		//set initial value if it is an output
+		if (strcmp(direction_, "out") == 0)
+		{
+			fp = fopen(valuefile, "rb+");
+			rewind(fp);
+			fwrite(value_, sizeof(char), kvaluelength, fp);
+			fclose(fp);
+		}
+
+		//print setup information to the user
+		//printf("IO %s set as %sput\n", ID_, direction_);
+	}
+	void ConfigurePCA9685(void *ptr)
+	{
+		id_ = (int)strtol(ID_, NULL, 10);
+		extPin = (PCA9685*)ptr;
+		extPin->Set_Discrete(id_, CheckInvert(intValue_));
+	}
 public:
+	int C_Index;
 	IO_Pin()
 	{
+		intValue_ = 0;
+		invert_ = 0;
+		hardwaretype_ = 0;
+		C_Index = -1;
+		id_ = 0;
+		extPin = NULL;
 	}
 	~IO_Pin()
 	{
@@ -761,71 +1044,72 @@ public:
 		fwrite(ID_, sizeof(char), kIDlength, fp);
 		fclose(fp);
 	}
-	void Configure(char * ID, char * direction, int value)
+	void Config_Pin(char *fileread, int length, void * ptr)
 	{
-	//char direction must be "in" or "out"
-	//note that if it is an input, the value argument has no effect
-		if ((atoi(ID) < knumAM335xGPIO) &&
-			(atoi(ID) > 0 ) &&
-			((strcmp(direction,"in") == 0) ||
-			 (strcmp(direction, "out") == 0)) &&
-			((value == 0) ||
-			 (value == 1)))
+		int period = 0;
+		int ontime = 0;
+		char token[knumParameters][kIDlength];
+		char line[length];
+		strcpy(line, fileread);
+		line[strcspn(line, "\n")] = 0; //Set the \n character to a NULL
+
+		int i = 0;
+		int j;
+		int param = 0;
+		for (param = 0; param < knumParameters; param++)
 		{
-			//initialize and zero-ize variables
-			FILE * fp;
-			bzero(directionfile, kDiscretePinfilelength);
-			bzero(valuefile, kDiscretePinfilelength);
-			bzero(direction_, kdirectionlength);
-			bzero(ID_, kIDlength);
-			bzero(value_, kvaluelength);
-			strcpy(ID_, ID);
-			strcpy(direction_, direction);
-
-			//set access filenames
-			sprintf(value_, "%d", value);
-			sprintf(directionfile, "/sys/class/gpio/gpio%s/direction", ID_);
-			sprintf(valuefile, "/sys/class/gpio/gpio%s/value", ID_);
-
-			//create files in filesystem to write to
-			fp = fopen("/sys/class/gpio/export", "ab");
-			rewind(fp);
-			fwrite(ID_, sizeof(char), kIDlength, fp);
-			fclose(fp);
-
-			//set direction
-			fp = fopen(directionfile, "rb+");
-			rewind(fp);
-			fwrite(direction_, sizeof(char), kdirectionlength, fp);
-			fclose(fp);
-
-			//set initial value if it is an output
-			if (strcmp(direction, "out") == 0)
+			bzero(token[param], kIDlength);
+			j = 0;
+			while ((line[i] != ' ') && (line[i] != NULL) && (i < length))
 			{
-				fp = fopen(valuefile, "rb+");
-				rewind(fp);
-				fwrite(value_, sizeof(char), kvaluelength, fp);
-				fclose(fp);
+				token[param][j] = line[i];
+				j++;
+				i++;
 			}
-
-		//print setup information to the user
-			printf("IO %s set as %sput\n", ID_, direction_);
+			while ((line[i] == ' ') && (line[i] != NULL) && (i < length))
+			{
+				i++;
+			}
 		}
-		else
+		strcpy(ID_, token[0]);
+		strcpy(direction_, token[1]);
+		intValue_ = (int)strtol(token[2], NULL, 10);
+		hardwaretype_ = (int)strtol(token[3], NULL, 10);
+		invert_ = (int)strtod(token[4], NULL);
+		C_Index = (int)strtol(token[5], NULL, 10);
+
+		switch (hardwaretype_)
 		{
-			printf("Error: GPIO ID number out of bounds\n");
-			printf("Error direction %s\n", direction);
+		case internal:
+			ConfigureInternal();
+			break;
+		case external:
+			ConfigurePCA9685(ptr);
+			break;
+		default:
+			break;
 		}
 	}
 	void Set(int value)
 	{
-		// Set the value of a pin (0 or 1)
-		FILE * fp;
-		sprintf(value_, "%d", value);
-		fp = fopen(valuefile, "rb+");
-		rewind(fp);
-		fwrite(value_, sizeof(char), 1, fp);
-		fclose(fp);
+		intValue_ = value;
+		switch (hardwaretype_)
+		{
+		case 0:
+			// Set the value of a pin (0 or 1)
+			FILE * fp;
+			sprintf(value_, "%d", CheckInvert(intValue_));
+			fp = fopen(valuefile, "rb+");
+			rewind(fp);
+			fwrite(value_, sizeof(char), 1, fp);
+			fclose(fp);
+			break;
+		case 1:
+			extPin->Set_Discrete(id_, CheckInvert(intValue_));
+			break;
+		default:
+			break;
+		}
 	}
 	int Read()
 	{
@@ -839,104 +1123,303 @@ public:
 
 class PWM_Pin
 {
-
 private:
-	static const int kPWMfilelength = 64;
-	static const int kvaluelength = 24;
+	static const int RC_Min_us 		= 900;	//RC PWM min ontime in us
+	static const int RC_Max_us 		= 2100;	//RC PWM max ontime in us
+	static const int kTrimNeutral 	= 50;	//trim is "neutral"
+	static const int internal 		= 0;	//denotes PWM pins on AM3359 chip
+	static const int external 		= 1;	//PWM pin on PCA9685 I2C expansion
+	static const int kPWMfilelength = 64;	//long enough to hold a filename
+	static const int kvaluelength 	= 24;	//long enough to hold name values
+
+	static const int knumParameters = 7;	//# of configuration parameters
+
+	PCA9685 *extPWM;
 	char period_[kvaluelength];
 	char ID_[kvaluelength];
 	char duty_[kvaluelength];
 	char periodfile[kPWMfilelength];
 	char dutyfile[kPWMfilelength];
 	char polarityfile[kPWMfilelength];
+	int id;
+	int hardwaretype_;
+	float T_coef;
 
-public:
-	PWM_Pin()
+	void ConfigurePCA9685(char * ID, void * ptr, int initPeriod_us , int initOntime_us)
 	{
+		id = (int)strtol(ID, NULL, 10);
+		extPWM = (PCA9685*)ptr;
+		extPWM->SetThrottle_us(id, initOntime_us);
 	}
-	~PWM_Pin()
+	void ConfigureInternal(char * ID, int initPeriod_us , int initOntime_us)
 	{
-	}
-	void Configure(char * ID, char * period, char * duty)
-	{
+
+		FILE * fp;
 		bzero(periodfile, kPWMfilelength);
 		bzero(dutyfile, kPWMfilelength);
 		bzero(polarityfile, kPWMfilelength);
 		strcpy(ID_, ID);
-		strcpy(period_, period);
-		strcpy(duty_, duty);
 
-		sprintf(periodfile, "/sys/devices/ocp.2/%s/period", ID_);
-		sprintf(dutyfile, "/sys/devices/ocp.2/%s/duty", ID_);
-		sprintf(polarityfile, "/sys/devices/ocp.2/%s/polarity", ID_);
+		//The drivers add a .## to the end of the pwm control folders. The OS
+		//can change these numbers on a whim, so this code searches for the
+		//file with a wildcard and returns whatever the current number is.
+		sprintf(periodfile, "echo /sys/devices/ocp.2/%s*/period", ID_);
+		sprintf(dutyfile, "echo /sys/devices/ocp.2/%s*/duty", ID_);
+		sprintf(polarityfile, "echo /sys/devices/ocp.2/%s*/polarity", ID_);
 
-		FILE * fp;
-		fp = fopen(periodfile, "rb+");
-		rewind(fp);
-		fwrite(period_, sizeof(char), kvaluelength, fp);
-		fclose(fp);
+		fp = popen(periodfile, "r");
+		fgets(periodfile, kPWMfilelength, fp);
+		periodfile[strcspn(periodfile, "\n")] = 0;
+		pclose(fp);
 
-		fp = fopen(dutyfile, "rb+");
-		rewind(fp);
-		fwrite(duty, sizeof(char), kvaluelength, fp);
-		fclose(fp);
+		fp = popen(dutyfile, "r");
+		fgets(dutyfile, kPWMfilelength, fp);
+		dutyfile[strcspn(dutyfile, "\n")] = 0;
+		pclose(fp);
+
+		fp = popen(polarityfile, "r");
+		fgets(polarityfile, kPWMfilelength, fp);
+		polarityfile[strcspn(polarityfile, "\n")] = 0;
+		pclose(fp);
+		//With the drivers found, we can go ahead and set the initial values
 
 		fp = fopen(polarityfile, "rb+");
 		rewind(fp);
 		fwrite("0", sizeof(char), 1, fp);
 		fclose(fp);
 
-		printf("PWM %s period %sns, duty %sns\n", ID_, period_, duty_);
-	}
-	void Set_Period(char * period)
-	{
-		FILE * fp;
-		strcpy(period_, period);
-		fp = fopen(periodfile, "rb+");
-		rewind(fp);
-		fwrite(period_, sizeof(char), 12, fp);
-		fclose(fp);
-	}
-	void Set_Duty(char * duty)
-	{
-		FILE * fp;
-		strcpy(duty_, duty);
-		fp = fopen(dutyfile, "rb+");
-		rewind(fp);
-		fwrite(duty, sizeof(char), 12, fp);
-		fclose(fp);
-	}
-};
+		Set_Period_us(initPeriod_us);
+		Set_OnTime_us(initOntime_us);
 
-class GPIO_Pins
-{
+		//printf("PWM %s period %sns, duty %sns\n", ID_, period_, duty_);
+	}
 public:
-	IO_Pin Pin[4];
-	PWM_Pin MotorPWM[3];
-	PWM_Pin ServoPWM[3];
-	GPIO_Pins()
+	int C_Index;
+	int T_Index;
+	PWM_Pin()
+	{
+		id = 0;
+		extPWM = NULL;
+		C_Index = -1;
+		T_Index = -1;
+		T_coef = 1;
+		hardwaretype_ = 0;
+	}
+	~PWM_Pin()
 	{
 	}
-	~GPIO_Pins()
+	void Config_Pin(char *fileread, int length, void * ptr)
 	{
-	}
-	void ReadHardwareConfig()
-	{
-		Pin[0].Configure("68", "out", 0); //P8_10
-		Pin[1].Configure("45", "out", 0); //P8_11
-		Pin[2].Configure("44", "out", 0); //P8_12
-		Pin[3].Configure("26", "out", 0); //P8_14
+		int period = 0;
+		int ontime = 0;
+		char token[knumParameters][kvaluelength];
+		char line[length];
+		strcpy(line, fileread);
+		line[strcspn(line, "\n")] = 0; //Set the \n character to a NULL
 
-		MotorPWM[0].Configure("pwm_test_P8_13.11", "20000000", "1000000");
-		MotorPWM[1].Configure("pwm_test_P8_19.12", "20000000", "1000000");
-		MotorPWM[2].Configure("pwm_test_P9_14.13", "20000000", "1000000");
-		ServoPWM[0].Configure("pwm_test_P9_16.14", "20000000", "1000000");
-		ServoPWM[1].Configure("pwm_test_P9_21.15", "20000000", "1000000");
-		ServoPWM[2].Configure("pwm_test_P9_22.16", "20000000", "1000000");
+		int i = 0;
+		int j;
+		int param = 0;
+		for (param = 0; param < knumParameters; param++)
+		{
+			bzero(token[param], kvaluelength);
+			j = 0;
+			while ((line[i] != ' ') && (line[i] != NULL) && (i < length))
+			{
+				token[param][j] = line[i];
+				j++;
+				i++;
+			}
+			while ((line[i] == ' ') && (line[i] != NULL) && (i < length))
+			{
+				i++;
+			}
+		}
+		strcpy(ID_, token[0]);
+		hardwaretype_ = (int)strtol(token[1], NULL, 10);
+		C_Index = (int)strtol(token[2], NULL, 10);
+		T_Index = (int)strtol(token[3], NULL, 10);
+		T_coef = (float)strtod(token[4], NULL);
+		period = (int)strtol(token[5], NULL, 10);
+		ontime = (int)strtol(token[6], NULL, 10);
+
+		switch (hardwaretype_)
+		{
+		case internal:
+			ConfigureInternal(ID_, period , ontime);
+			break;
+		case external:
+			ConfigurePCA9685(ID_, ptr, period , ontime);
+			break;
+		default:
+			break;
+		}
+		//printf("%15s period %sns, duty %sns\n", ID_, period_, duty_);
+	}
+	void Set_Period_us(int Period)
+	{
+		switch (hardwaretype_)
+		{
+		case internal:
+			Period = Period * 1000; //convert us to ns
+			sprintf(period_, "%d", Period);
+			FILE * fp;
+			fp = fopen(periodfile, "rb+");
+			rewind(fp);
+			fwrite(period_, sizeof(char), kvaluelength, fp);
+			fclose(fp);
+			break;
+		case external:
+			float f;
+			f = 1 / ((float)Period);
+			extPWM->SetFrequency(f);
+			break;
+		default:
+			break;
+		}
+	}
+	void Set_OnTime_us(int onTime)
+	{
+		switch (hardwaretype_)
+		{
+		case internal:
+			onTime = onTime * 1000; //convert us to ns
+			sprintf(duty_, "%d", onTime);
+			FILE * fp;
+			fp = fopen(dutyfile, "rb+");
+			rewind(fp);
+			fwrite(duty_, sizeof(char), kvaluelength, fp);
+			fclose(fp);
+			break;
+		case external:
+			extPWM->SetThrottle_us(id, onTime);
+			break;
+		default:
+			break;
+		}
+	}
+	void Set_RC_Throttle(float percent)
+	{
+		switch (hardwaretype_)
+		{
+		case internal:
+			int onTime;
+			onTime = (int)round(percent*(RC_Max_us-RC_Min_us)/100 + RC_Min_us);
+			onTime = onTime * 1000; //convert us to ns
+			sprintf(duty_, "%d", onTime);
+			FILE * fp;
+			fp = fopen(dutyfile, "rb+");
+			rewind(fp);
+			fwrite(duty_, sizeof(char), kvaluelength, fp);
+			fclose(fp);
+			break;
+		case external:
+			extPWM->Set_RC_Throttle(id, percent);
+			break;
+		default:
+			break;
+		}
+	}
+	void Set_RC_Throttle_with_Trim(float command, float trim)
+	{
+		command = command + T_coef * (trim - kTrimNeutral);
+		if (command < 0) command = 0;
+		if (command > 100) command = 100;
+		Set_RC_Throttle(command);
 	}
 };
 
-struct Pointer_Set {
+class Deep_One_Controls
+{
+/* This class creates an array of pwm and discrete pins. It reads a
+ * configuration file and sends the lines to the PWM and discrete pin objects
+ * to be parsed and stored. It also provides an interface to apply the command
+ * array from the ROV object to those pin objects.
+ *
+ */
+private:
+	static const int numPWM = 22;		//6 internal, 15 external PWM
+	static const int numDiscrete = 22;	//15 internal, 6 external discrete
+	static const int knameLength = 16;	//longer than longest pwm name
+	static const int klineLength = 80;	//length of config file lines
+	PCA9685 IOExpansion;				//16 Channel I2C IO expander
+
+public:
+	IO_Pin Pin[numDiscrete];
+	PWM_Pin PWM[numPWM];
+
+	Deep_One_Controls()
+	{
+	}
+	~Deep_One_Controls()
+	{
+	}
+	void SetupOutputs(int extPWMbus, int extPWMaddr)
+	{
+	/*This function opens the Disc_Pins.cfg and PWM_Pins.cfg files and reads
+	 * them line by line. Each line is fed in turn to a PWM or Discrete pin
+	 * control object, where it is parsed and used to initialize that pin.
+	 */
+		IOExpansion.RC_PWM_Setup(extPWMbus, extPWMaddr);
+
+		FILE *fp;
+		char line[klineLength];
+		fp = fopen("PWM_Pins.cfg", "r");
+
+		int i;
+		for (i = 0; i < numPWM; i++)
+		{
+			bzero(line, klineLength);
+			fgets(line, klineLength, fp);
+			PWM[i].Config_Pin(line, klineLength, &IOExpansion);
+		}
+		fclose(fp);
+
+		fp = fopen("Disc_Pins.cfg", "r");
+		for (i = 0; i < numDiscrete; i++)
+		{
+			fgets(line, klineLength, fp);
+			Pin[i].Config_Pin(line, klineLength, &IOExpansion);
+		}
+		fclose(fp);
+	}
+	void ApplyCommands(int *CommandList)
+	{
+	/* Commands are sent as an integer array. Each pin has a command array
+	 * index which tells it what command array position carries its
+	 * instruction. The config files allow the pins to be reorganized to
+	 * respond to different commands.
+	 */
+		int i;
+		for (i = 0; i < numPWM; i++)
+		{
+			if (PWM[i].C_Index > -1)
+			{
+				float command = (float)CommandList[PWM[i].C_Index];
+				if (PWM[i].T_Index > -1)
+				{
+					float trim = (float)CommandList[PWM[i].T_Index];
+					PWM[i].Set_RC_Throttle_with_Trim(command, trim);
+				}
+				else
+				{
+					PWM[i].Set_RC_Throttle(command);
+				}
+			}
+		}
+		for (i = 0; i < numDiscrete; i++)
+		{
+			if (Pin[i].C_Index > -1)
+			{
+				int command = CommandList[Pin[i].C_Index];
+				Pin[i].Set(command);
+			}
+		}
+	}
+};
+
+struct Pointer_Set
+{
 	/* This class exists because pthread_create can only pass one void argument
 	 * to the subroutine it links to, and because that function must be static
 	 * when it is a member of a class. Static functions are global, so they
@@ -1043,7 +1526,7 @@ public:
                             client_addr_len_);
         if (transmit_ <= 0)
         {
-            printf("Transmit Error!\n");
+            //printf("Transmit Error!\n");
         }
     }
 
@@ -1062,16 +1545,15 @@ class ROV_Manager
      * sensor' function to collect sensor data for telemetry.
      */
 private:
-    GPIO_Pins HardwarePinArray;
-    UDP_Connection *connection_;
-    LSM303DLHC DirectionSensor;
-    ADS1115 ADC;
-    int comms_thread_id;
-    char sensor_string_[BUFFERLEN];
-
-    int motor[NUM_MOTORS];
-    int relay[NUM_RELAYS];
-    int servo[NUM_SERVOS];
+	Deep_One_Controls Controls;		//Interface to PWM and discrete outputs
+    UDP_Connection *connection_;	//Pointer to the comms handler object
+    LSM303DLHC DirectionSensor; 	//Compass + 3 axis accelerometer
+    ADS1115 ADC0;					//16 bit, 4 channel ADC's.
+    ADS1115 ADC1;					//
+    int comms_thread_id;			//ID for the second thread
+    int channel_;					//Read one ADC channel per ADC, per loop
+    int commands[BUFFERLEN];		//Command list from the surface
+    char sensor_string_[BUFFERLEN];	//Telemetry string to send to the surface
 
     static void *Communications_Handler(void *ptr)
     {
@@ -1106,104 +1588,48 @@ private:
     {
     	/* This function converts the received message string in the UDP object
     	 * into a set of integers for the ROV controls. The message packet is a
-    	 * space separated character string of the form:
-    	 * intMotor1 intMotorN intRelay1 intRelayN intServo1 intServoN
-    	 *
-    	 * The maximum number N of each type of device is set in the # defines.
-    	 * The data is put into integer arrays to represent the actuation of
-    	 * each actuator. The arrays are: motor[], relay[], servo[].
+    	 * space separated character string
     	 */
 
         int i=0;
-        int j=0;
-        int k=0;
-        int intRxdata[NUM_MOTORS + NUM_RELAYS + NUM_SERVOS];
         std::istringstream iss(rxdata);
-        while((iss >> intRxdata[i]) &&
-              (i < (NUM_MOTORS + NUM_RELAYS + NUM_SERVOS)))
+        while((iss >> commands[i]) && (i < BUFFERLEN))
         {
-            if (i < NUM_MOTORS)
-            {
-            	motor[i] = intRxdata[i];
-            }
-            else if (i < (NUM_MOTORS + NUM_RELAYS))
-            {
-            	relay[j] = intRxdata[i];
-                j++;
-            }
-            else if (i < (NUM_MOTORS + NUM_RELAYS + NUM_SERVOS))
-            {
-            	servo[k] = intRxdata[i];
-                k++;
-            }
+        	//printf("%d ", commands[i]);
             i++;
         }
-//		printf("\nMotors: ");
-//		for(i=0;i<NUM_MOTORS; i++)
-//		{
-//			printf("%d ", motor[i]);
-//		}
-//			printf("\nRelays: ");
-//		for(i=0;i<NUM_RELAYS; i++)
-//		{
-//			printf("%d ", relay[i]);
-//		}
-//			printf("\nServos: ");
-//		for(i=0;i<NUM_SERVOS; i++)
-//		{
-//			printf("%d ", servo[i]);
-//		}
-
+        //printf("\n");
         return;
     }
     void Apply_Commands()
     {
-    	int i;
-    	for (i=0; i<NUM_MOTORS; i++)
-    	{
-    		char * a = new char[12];
-    		sprintf(a, "%i", motor[i]*1000);
-    		HardwarePinArray.MotorPWM[i].Set_Duty(a);
-    	}
-    	for (i=0; i<NUM_RELAYS; i++)
-    	{
-    		HardwarePinArray.Pin[i].Set(relay[i]);
-    	}
-    	for (i=0; i<NUM_SERVOS; i++)
-    	{
-    		char * a = new char[12];
-    		int servopwm = 0;
-    		//Monterey sends the servo deflection in degrees
-    		//This line converts to microseconds
-    		servopwm = 900 + (int)round(((float)servo[i]/180) * 1200);
-    		//The pwm in the beaglebone needs it in nanoseconds
-    		sprintf(a, "%i", servopwm * 1000);
-    		//printf("%s \r", a);
-    		HardwarePinArray.ServoPWM[i].Set_Duty(a);
-    	}
+    	Controls.ApplyCommands(commands);
     }
 
 public:
-    SensorData Heading;
-    SensorData Roll;
-    SensorData Pitch;
-    SensorData Voltage;
+    /* SensorData's are data structures for applying a conversion constant and
+     * offset for raw data from a sensor, and updating a moving average to
+     * smooth out noise.*/
+    SensorData Heading;			//LSM303DLHC Magnetic heading in degrees
+    SensorData Roll;			//LSM303DLHC Roll, based on gravity vector
+    SensorData Pitch;			//LSM303DLHC Pitch, based on gravity vector
+    SensorData Voltage;			//ADC0 ch2 Bus Voltage
+    SensorData BusCurrent;		//ADC0 ch0 Bus Current
+    SensorData BatteryCurrent;	//ADC0 ch1 Battery Current
+    SensorData Depth;			//ADC0 ch3 Depth by pressure
+    SensorData Temperature;		//ADC1 ch3
+    SensorData Sensor0;			//ADC1 ch0
+    SensorData Sensor1;			//ADC1 ch1
+    SensorData Sensor2;			//ADC1 ch2
 
     ROV_Manager(UDP_Connection * UDP_Ptr)
 	{
-    	/*Hardcoded Values*/
-    	DirectionSensor.Configure(2, 0x1e, 0x19);
-    	ADC.Configure(2, 0x48);
-    	Heading.Setup(10, 1);
-    	Roll.Setup(5, 1);
-    	Pitch.Setup(5, 1);
-    	Voltage.Setup(10, .0006875);
-    	/*There are more hardcoded values in the hardware config*/
-    	HardwarePinArray.ReadHardwareConfig();
-
+    	/*Initialize memory*/
 		bzero((char *) &sensor_string_, BUFFERLEN);
+		bzero((int *) &commands, BUFFERLEN);
 		connection_ = UDP_Ptr;
 	    comms_thread_id = 0;
+	    channel_ = 0;
 	}
     ~ROV_Manager()
     {
@@ -1217,22 +1643,99 @@ public:
         comms_thread_id = pthread_create(&comms_thread, NULL,
                 Communications_Handler, (void *) ptr);
     }
+    void Setup_Hardware_with_Magic_Numbers()
+    {
+    	/*Hardcoded Values for sensor addresses and things like that*/
+    	DirectionSensor.Configure(2, 0x1e, 0x19);
+    	ADC0.Configure(2, 0x48);
+    	ADC0.SetMuxChannel(channel_);
+    	ADC1.Configure(2, 0x49);
+    	ADC1.SetMuxChannel(channel_);
+
+    	/*Configure sensor data structures*/
+    	/*LSM303DLHC*/
+    	Heading.Setup(10, 1, 0);
+    	Roll.Setup(5, 1, 0);
+    	Pitch.Setup(5, 1, 0);
+
+    	/*ADC0*/
+    	Voltage.Setup(10, .0004817, 0);
+    	BusCurrent.Setup(10, .0025, -1.7);
+    	BatteryCurrent.Setup(10, .00125, -1.7);
+    	Depth.Setup(10, .0001, 0);
+
+    	/*ADC1*/
+    	Sensor0.Setup(10, .0001, 0);
+    	Sensor1.Setup(10, .0001, 0);
+    	Sensor2.Setup(10, .0001, 0);
+    	Temperature.Setup(10, .00625, -50);
+
+    	/*Hardware interface*/
+    	Controls.SetupOutputs(2, 0x40);
+
+    }
     void Sample_Sensors()
     {
-//		DirectionSensor.ReadMagRawData();
-//		DirectionSensor.ReadAccelRawData();
-    	Voltage.Update((float)ADC.ReadData());
-    	//ADC.SetMuxChannel(0);
+    	/*Start by clearing out any old data*/
+    	bzero((char *) &sensor_string_, BUFFERLEN);
 
-//		sprintf(sensor_string_, "1 1 %4.0f 12 %4.0f %4.0f",
-//				DirectionSensor.GetHeading(),
-//				DirectionSensor.GetRoll(),
-//				DirectionSensor.GetPitch());
+    	/*Read LSM303DLHC*/
+    	DirectionSensor.ReadMagRawData();
+		DirectionSensor.ReadAccelRawData();
+		Roll.Update(DirectionSensor.GetRoll());
+		Pitch.Update(DirectionSensor.GetPitch());
+		Heading.Update(DirectionSensor.GetHeading());
 
-		sprintf(sensor_string_, "1 1 360 %7.2f 90 90",
-				Voltage.average);
+		/* Read ADC's. The I2C bus has a lot of sensors on it, so only sample
+		 * what is needed per ADC per program loop. The "channel" variable is
+		 * just a counter. The ADCs can be set to any channel and read in any
+		 * order.*/
+		switch (channel_)
+		{
+		case 0:
+			BusCurrent.Update((float)ADC0.ReadData());
+			break;
+		case 1:
+			BatteryCurrent.Update((float)ADC0.ReadData());
+			break;
+		case 2:
+			Voltage.Update((float)ADC0.ReadData());
+			break;
+		case 3:
+			Depth.Update((float)ADC0.ReadData());
+			Temperature.Update((float)ADC1.ReadData());
+			break;
+		default:
+			break;
+		}
+		channel_++;
+		if (channel_ == ADC0.knum_channels)
+		{
+			channel_ = 0;
+		}
+		ADC0.SetMuxChannel(channel_);
+		ADC1.SetMuxChannel(channel_);
+
+		/*Print sensor data to console to help with debug*/
+//    	printf("H:%.0fdeg R:%.0fdeg P:%.0fdeg "
+//    			"T:%.1fC "
+//    			"VBus:%.1fV IBus:%.2fA IBatt:%.2fA D:%.0fm\n",
+//    			Heading.average, Roll.average, Pitch.average,
+//				Temperature.average,
+//				Voltage.average, BusCurrent.average,
+//				BatteryCurrent.average, Depth.average);
+
+    	/*Convert floating point sensor data to a string for transmission*/
+    	sprintf(sensor_string_, "1.0 %.0f %.1f %.2f %.0f 1",
+				Depth.average, Voltage.average, BusCurrent.average,
+				Heading.average);
+//		Test data generator
+//    	i++;
+//    	if (i>10) i = 0;
+//		sprintf(sensor_string_, "%d %d %d %d %d %d ", i, i+1, i+2, i+3, i+4, i+5);
+
+    	/*Load the data transmit buffer with the sensor string*/
     	connection_->txbuffer = sensor_string_;
-
     }
 
 }; //End ROV Manager Class
