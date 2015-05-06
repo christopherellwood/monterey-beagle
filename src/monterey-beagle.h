@@ -1,12 +1,12 @@
-#include <iostream>
-#include <stdio.h>
+#include <iostream> //needed?
+#include <stdio.h> //needed?
 #include <unistd.h>
-#include <stdlib.h>
+#include <stdlib.h> //needed?
 #include <fcntl.h>
-#include <stdint.h>
+#include <stdint.h> //needed?
 #include <string.h>
 #include <cstdlib>
-#include <pthread.h>
+#include <pthread.h> //needed?
 #include <math.h>
 
 #include <sys/types.h>
@@ -1163,9 +1163,9 @@ private:
 		//The drivers add a .## to the end of the pwm control folders. The OS
 		//can change these numbers on a whim, so this code searches for the
 		//file with a wildcard and returns whatever the current number is.
-		sprintf(periodfile, "echo /sys/devices/ocp.2/%s*/period", ID_);
-		sprintf(dutyfile, "echo /sys/devices/ocp.2/%s*/duty", ID_);
-		sprintf(polarityfile, "echo /sys/devices/ocp.2/%s*/polarity", ID_);
+		sprintf(periodfile, "echo /sys/devices/ocp*/%s*/period", ID_);
+		sprintf(dutyfile, "echo /sys/devices/ocp*/%s*/duty", ID_);
+		sprintf(polarityfile, "echo /sys/devices/ocp*/%s*/polarity", ID_);
 
 		fp = popen(periodfile, "r");
 		fgets(periodfile, kPWMfilelength, fp);
