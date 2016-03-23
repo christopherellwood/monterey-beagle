@@ -25,14 +25,19 @@ apt-get update
 apt-cache search linux-image | grep 3.8.13-bone
 apt-get install linux-image-3.8.13-boneX
 
+Overlays may need to be recompiled:
+dtc -O dtb -o DM-GPIO-Test-00A0.dtbo -b 0 -@ DM-GPIO-Test.dts
+dtc -O dtb -o bone_six_pwm-00A0.dtbo -b 0 -@ bone_six_pwm-00A0.dts
+
 Then copy the custom dtb overlays
 cp bone_six_pwm-00A0.dtbo /lib/firmware
-cp DM-GPIO-Test.dtbo /lib/firmware
+cp DM-GPIO-Test-00A0.dtbo /lib/firmware
 
 Then edit the device tree load options
 vi /boot/uEnv.txt
+nano /boot/uEnv.txt
 
-Uncomment:
+Uncomment (do not disable the emmc!):
 cape_disable=capemgr.disable_partno=BB-BONELT-HDMI,BB-BONELT-HDMIN
 
 Add line:
@@ -40,6 +45,7 @@ cape_enable=capemgr.enable_partno=am33xx_pwm,BB-SPIDEV1,BB-I2C1 drm.debug=7
 
 Edit the custom cape loader workaround file
 vi /etc/default/capemgr
+nano /etc/default/capemgr
 CAPE=bone_six_pwm,DM-GPIO-Test
 
 Reboot and run cat /sys/devices/bone_capemgr*/slots should read
