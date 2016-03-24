@@ -1513,7 +1513,7 @@ public:
         receive_successful = recvfrom(socketnum_, rxbuffer, BUFFERLEN, 0,
                             (struct sockaddr *) &client_addr_,
                             &client_addr_len_);
-        //printf("%s \r", rxbuffer);
+        //printf("received: %s \n", rxbuffer);
     }
     void SendData()
     {

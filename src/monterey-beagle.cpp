@@ -19,6 +19,7 @@ void timed_function()
 {
 	//Tell the ROV manager to sample the sensors
 	ROV.Sample_Sensors();
+
 }
 
 int main()
@@ -37,7 +38,6 @@ int main()
 	{
 		printf("Timer error, exiting!\n");
 	}
-
 	//Idle while not sampling the sensors
 	while(1)
 	{

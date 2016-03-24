@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 2.6)
 project(monterey-beagle)
 
-SET(GCC_COVERAGE_COMPILE_FLAGS "-lpthread")
-SET(CMAKE_SHARED_LINKER_FLAGS "-static-libstdc++ -static-libgcc")
+SET(GCC_COVERAGE_COMPILE_FLAGS "-pthread -lpthread")
+SET(CMAKE_SHARED_LINKER_FLAGS "-static -static-libgcc -static-libstdc++")
 
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
