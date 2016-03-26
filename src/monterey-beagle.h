@@ -51,7 +51,7 @@ private:
 	static const short kSub2Reg 	 = 0x03;//
 	static const short kSub3Reg 	 = 0x04;//
 	static const short kAllCallReg	 = 0x05;//
-	static const short kPrescaleReg	 = 0xFE; //Prescale sets output frequency
+	static const short kPrescaleReg	 = 0xFE;//Prescale sets output frequency
 	static const short kOn_Ch0_L_Reg = 0x06;//When ch0 turns on, bits 0:7
 	static const short kOn_Ch0_H_Reg = 0x07;//When ch0 turns on, bits 8:12
 	static const short kOff_Ch0_L_Reg= 0x08;//When ch0 turns off, bits 0:7
@@ -63,7 +63,7 @@ private:
 	static const int kZero			= 0x0000;
 	static const int kStartOsc 		= 0x0100;
 	static const int kStopOsc 		= 0x1100;
-	static const int kMode2Default	= 0x0400;
+	static const int kMode2Default	= 0x0000; //0x0400 for totem pole output
 	static const int kServoFreq		= 46;	//Tune to get 50Hz out
 	static const int kAllCallDef	= 0xe000;
 	static const int kFullOnOff		= 0x1000;
@@ -1545,6 +1545,7 @@ class ROV_Manager
      * sensor' function to collect sensor data for telemetry.
      */
 private:
+	/*TODO: Change name from Deep One to Tashtego, or to a generic name*/
 	Deep_One_Controls Controls;		//Interface to PWM and discrete outputs
     UDP_Connection *connection_;	//Pointer to the comms handler object
     LSM303DLHC DirectionSensor; 	//Compass + 3 axis accelerometer
