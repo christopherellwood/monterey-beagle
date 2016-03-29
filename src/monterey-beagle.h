@@ -1141,6 +1141,7 @@ private:
 	char periodfile[kPWMfilelength];
 	char dutyfile[kPWMfilelength];
 	char polarityfile[kPWMfilelength];
+	int iPeriod;
 	int id;
 	int hardwaretype_;
 	float T_coef;
@@ -1198,6 +1199,7 @@ public:
 	int T_Index;
 	PWM_Pin()
 	{
+		iPeriod = 0;
 		id = 0;
 		extPWM = NULL;
 		C_Index = -1;
@@ -1249,7 +1251,7 @@ public:
 			ConfigureInternal(ID_, period , ontime);
 			break;
 		case external:
-			ConfigurePCA9685(ID_, ptr, period , ontime);
+			ConfigurePCA9685(ID_, ptr, (int)period , (int)ontime);
 			break;
 		default:
 			break;
@@ -1261,6 +1263,7 @@ public:
 		switch (hardwaretype_)
 		{
 		case internal:
+			iPeriod = Period;
 			Period = Period * 1000; //convert us to ns
 			sprintf(period_, "%d", Period);
 			FILE * fp;
@@ -1304,8 +1307,19 @@ public:
 		{
 		case internal:
 			int onTime;
-			onTime = (int)round(percent*(RC_Max_us-RC_Min_us)/100 + RC_Min_us);
+			/* HACK WARNING!
+			 * Hardware change means that all internal PWM pins are now basic
+			 * PWM or 0-100% of iPeriod. No RC. The easiest way to change the
+			 * software is by changing the following line of code.
+			 * TODO: Fix this throttle control chain starting at the ROV
+			 * controls object all the way down to this line to make this
+			 * change clear so the code doesn't seem hacked.
+			 */
+			//onTime = (int)round(percent*(RC_Max_us-RC_Min_us)/100 + RC_Min_us);
+			onTime = (int)round(percent*(iPeriod)/100);
+
 			onTime = onTime * 1000; //convert us to ns
+			//printf("Period is: %d * 1000, On Time is: %d\n", iPeriod, onTime);
 			sprintf(duty_, "%d", onTime);
 			FILE * fp;
 			fp = fopen(dutyfile, "rb+");
