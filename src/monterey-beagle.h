@@ -765,8 +765,28 @@ public:
 	}
 	void Configure(int i2cBus, int MagAddress, int AccelAddress)
 	{
-		Xaxis.Set(1,0,0);
-		Yaxis.Set(0,1,0);
+		/*********************************************************************/
+		/* These vectors define the X and Y axes of the vehicle relative to the
+		 * LSM303DLHC. This is necessary to determine the angle between the
+		 * vehicle forward axis and magnetic north.
+		 *
+		 * Calibrate the X axis to the vehicle front. look at the labeling on
+		 * the top of LSM303DLHC, and put a unit vector in the direction of the
+		 * vehicle front relative to the LSM303DLHC. For example, if the front
+		 * of the vehicle is in the negative X direction from the X axis on the
+		 * LSM303DLHC, then X axis is (-1,0,0).
+		 *
+		 * Calibrate the Y axis to the left side of the vehicle, using the same
+		 * technique. For example, if the left side of the vehicle is the
+		 * toward -Z on the LSM303DLHC, then Y axis is (0,0,-1)
+		 *
+		 * TODO: Make the following X and Y axis transforms not hard coded, or
+		 * put them in the magic numbers section
+		 */
+		Xaxis.Set(-1,0,0); //X-axis for the vehicle relative to the LSM303DLHC
+		Yaxis.Set(0,0,-1); //Y-axis for the vehicle relative to the LSM303DLHC
+		/********************************************************************/
+
 		MagAddress_ = MagAddress;
 		AccelAddress_ = AccelAddress;
 		sprintf(i2cBusFileName, "/dev/i2c-%d", i2cBus);
@@ -872,7 +892,7 @@ public:
 	float GetHeading()
 	{
 		/* Algorithm
-		 * 1) Project the north vector into the horizonatal plane:
+		 * 1) Project the north vector into the horizontal plane:
 		 * As long as the platform is still, the acceleration vector is the
 		 * Down Vector.
 		 * Cross Magnetic Vector with Down Vector to get West Vector.
@@ -1343,12 +1363,12 @@ public:
 	}
 };
 
-class Deep_One_Controls
+class ROV_Controls
 {
-/* This class creates an array of pwm and discrete pins. It reads a
- * configuration file and sends the lines to the PWM and discrete pin objects
- * to be parsed and stored. It also provides an interface to apply the command
- * array from the ROV object to those pin objects.
+/* This class creates an array of pwm and discrete pins (they control the ROV).
+ * It reads a configuration file and sends the lines to the PWM and discrete
+ * pin objects to be parsed and stored. It also provides an interface to apply
+ * the command array from the ROV object to those pin objects.
  *
  */
 private:
@@ -1362,10 +1382,10 @@ public:
 	IO_Pin Pin[numDiscrete];
 	PWM_Pin PWM[numPWM];
 
-	Deep_One_Controls()
+	ROV_Controls()
 	{
 	}
-	~Deep_One_Controls()
+	~ROV_Controls()
 	{
 	}
 	void SetupOutputs(int extPWMbus, int extPWMaddr)
@@ -1560,7 +1580,7 @@ class ROV_Manager
      */
 private:
 	/*TODO: Change name from Deep One to Tashtego, or to a generic name*/
-	Deep_One_Controls Controls;		//Interface to PWM and discrete outputs
+	ROV_Controls Controls;		//Interface to PWM and discrete outputs
     UDP_Connection *connection_;	//Pointer to the comms handler object
     LSM303DLHC DirectionSensor; 	//Compass + 3 axis accelerometer
     ADS1115 ADC0;					//16 bit, 4 channel ADC's.
